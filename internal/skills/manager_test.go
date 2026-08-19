@@ -1,0 +1,337 @@
+package skills
+
+import (
+	"bytes"
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+)
+
+type fakeRunner struct {
+	commands []Command
+	versions []map[string]string
+	failAt   int
+}
+
+func (runner *fakeRunner) Run(command Command) error {
+	runner.commands = append(runner.commands, command)
+	if runner.failAt > 0 && len(runner.commands) == runner.failAt {
+		return errors.New("simulated npx failure")
+	}
+	home, _ := environmentValue(command.Environment, "HOME")
+	if slices.Contains(command.Arguments, "add") {
+		name := argumentAfter(command.Arguments, "--skill")
+		version := runner.versions[len(runner.commands)-1]
+		for relative, contents := range version {
+			path := filepath.Join(home, ".agents", "skills", name, filepath.FromSlash(relative))
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if slices.Contains(command.Arguments, "remove") {
+		name := command.Arguments[3]
+		if err := os.RemoveAll(filepath.Join(home, ".agents", "skills", name)); err != nil {
+			return err
+		}
+		return os.RemoveAll(filepath.Join(home, ".claude", "skills", name))
+	}
+	return errors.New("unexpected command")
+}
+
+func TestManagerAddInstallsGlobalSkillAndClaudeFileMirror(t *testing.T) {
+	manager, runner, root := testManager(t, []map[string]string{{
+		"SKILL.md":           "---\nname: unslop\ndescription: test\n---\n",
+		"references/help.md": "help\n",
+	}})
+
+	if err := manager.Add("unslop", "https://github.com/poteto/noodle"); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	if len(runner.commands) != 1 {
+		t.Fatalf("commands = %d, want 1", len(runner.commands))
+	}
+	command := runner.commands[0]
+	wantArguments := []string{
+		"--yes", npmPackage, "add", "https://github.com/poteto/noodle",
+		"--skill", "unslop", "--global", "--agent", "codex", "--yes",
+	}
+	if !slices.Equal(command.Arguments, wantArguments) {
+		t.Errorf("arguments = %q, want %q", command.Arguments, wantArguments)
+	}
+	home, _ := environmentValue(command.Environment, "HOME")
+	if home != manager.ManagedHome {
+		t.Errorf("HOME = %q, want %q", home, manager.ManagedHome)
+	}
+	stateHome, _ := environmentValue(command.Environment, "XDG_STATE_HOME")
+	if stateHome != filepath.Join(manager.ManagedHome, ".local", "state") {
+		t.Errorf("XDG_STATE_HOME = %q", stateHome)
+	}
+
+	catalog, err := Load(manager.CatalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Skills) != 1 || catalog.Skills[0].Name != "unslop" || catalog.Skills[0].Digest == "" {
+		t.Fatalf("catalog = %#v", catalog)
+	}
+	for _, relative := range []string{"SKILL.md", "references/help.md"} {
+		canonical := filepath.Join(manager.ManagedHome, ".agents", "skills", "unslop", filepath.FromSlash(relative))
+		compatibility := filepath.Join(manager.ManagedHome, ".claude", "skills", "unslop", filepath.FromSlash(relative))
+		destination, err := os.Readlink(compatibility)
+		if err != nil {
+			t.Fatalf("Readlink(%s) error = %v", compatibility, err)
+		}
+		want, err := filepath.Rel(filepath.Dir(compatibility), canonical)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if destination != want {
+			t.Errorf("destination = %q, want %q", destination, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "skills.toml")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManagerAddRefusesUnownedDestination(t *testing.T) {
+	manager, runner, _ := testManager(t, []map[string]string{{"SKILL.md": "new"}})
+	path := filepath.Join(manager.ManagedHome, ".agents", "skills", "unslop", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("user data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := manager.Add("unslop", "https://github.com/poteto/noodle")
+	if err == nil || !strings.Contains(err.Error(), "not owned") {
+		t.Fatalf("Add() error = %v, want ownership error", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Errorf("npx was invoked %d times", len(runner.commands))
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "user data" {
+		t.Errorf("unowned file changed: %q, %v", data, err)
+	}
+}
+
+func TestManagerAddRefusesManagedParentSymlinkOutsideHome(t *testing.T) {
+	manager, runner, root := testManager(t, []map[string]string{{"SKILL.md": "new"}})
+	outside := filepath.Join(root, "outside")
+	if err := os.MkdirAll(filepath.Join(manager.ManagedHome, ".agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(manager.ManagedHome, ".agents", "skills")); err != nil {
+		t.Fatal(err)
+	}
+
+	err := manager.Add("unslop", "https://github.com/poteto/noodle")
+	if err == nil || !strings.Contains(err.Error(), "outside the managed home") {
+		t.Fatalf("Add() error = %v, want managed path error", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Errorf("npx was invoked %d times", len(runner.commands))
+	}
+	entries, readErr := os.ReadDir(outside)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Errorf("outside directory contains %d entries, want none", len(entries))
+	}
+}
+
+func TestManagerAddRollsBackInvalidInstall(t *testing.T) {
+	manager, runner, _ := testManager(t, []map[string]string{{"README.md": "invalid"}})
+
+	err := manager.Add("unslop", "https://github.com/poteto/noodle")
+	if err == nil || !strings.Contains(err.Error(), "SKILL.md") {
+		t.Fatalf("Add() error = %v, want invalid skill error", err)
+	}
+	if len(runner.commands) != 2 {
+		t.Fatalf("commands = %d, want add and rollback remove", len(runner.commands))
+	}
+	for _, path := range []string{
+		filepath.Join(manager.ManagedHome, ".agents", "skills", "unslop"),
+		filepath.Join(manager.ManagedHome, ".claude", "skills", "unslop"),
+	} {
+		if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+			t.Errorf("incomplete path %s remains: %v", path, statErr)
+		}
+	}
+	catalog, loadErr := Load(manager.CatalogPath)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(catalog.Skills) != 0 {
+		t.Errorf("catalog = %#v, want empty", catalog)
+	}
+}
+
+func TestManagerUpdateReplacesOwnedSkillAndRefreshesMirror(t *testing.T) {
+	manager, _, _ := testManager(t, []map[string]string{
+		{"SKILL.md": "old", "references/old.md": "old"},
+		{"SKILL.md": "new", "references/new.md": "new"},
+	})
+	if err := manager.Add("unslop", "https://github.com/poteto/noodle"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.Update("unslop"); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	canonical := filepath.Join(manager.ManagedHome, ".agents", "skills", "unslop")
+	data, err := os.ReadFile(filepath.Join(canonical, "SKILL.md"))
+	if err != nil || string(data) != "new" {
+		t.Errorf("updated skill = %q, %v", data, err)
+	}
+	compatibility := filepath.Join(manager.ManagedHome, ".claude", "skills", "unslop")
+	if _, err := os.Lstat(filepath.Join(compatibility, "references", "old.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("stale compatibility link remains: %v", err)
+	}
+	if _, err := os.Readlink(filepath.Join(compatibility, "references", "new.md")); err != nil {
+		t.Errorf("new compatibility link missing: %v", err)
+	}
+}
+
+func TestManagerUpdateRefusesLocallyModifiedSkill(t *testing.T) {
+	manager, runner, _ := testManager(t, []map[string]string{
+		{"SKILL.md": "old"},
+		{"SKILL.md": "new"},
+	})
+	if err := manager.Add("unslop", "https://github.com/poteto/noodle"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(manager.ManagedHome, ".agents", "skills", "unslop", "SKILL.md")
+	if err := os.WriteFile(path, []byte("local edit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.Update("unslop"); err == nil || !strings.Contains(err.Error(), "local changes") {
+		t.Fatalf("Update() error = %v, want local changes error", err)
+	}
+	if len(runner.commands) != 1 {
+		t.Errorf("npx command count = %d, want only initial add", len(runner.commands))
+	}
+}
+
+func TestManagerUpdateRefusesClaudeDirectorySymlink(t *testing.T) {
+	manager, runner, _ := testManager(t, []map[string]string{
+		{"SKILL.md": "old", "references/help.md": "help"},
+		{"SKILL.md": "new"},
+	})
+	if err := manager.Add("unslop", "https://github.com/poteto/noodle"); err != nil {
+		t.Fatal(err)
+	}
+	canonical := filepath.Join(manager.ManagedHome, ".agents", "skills", "unslop")
+	compatibility := filepath.Join(manager.ManagedHome, ".claude", "skills", "unslop")
+	compatibilityReferences := filepath.Join(compatibility, "references")
+	if err := os.RemoveAll(compatibilityReferences); err != nil {
+		t.Fatal(err)
+	}
+	destination, err := filepath.Rel(compatibility, filepath.Join(canonical, "references"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(destination, compatibilityReferences); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.Update("unslop"); err == nil || !strings.Contains(err.Error(), "individual skill file") {
+		t.Fatalf("Update() error = %v, want directory symlink ownership error", err)
+	}
+	if len(runner.commands) != 1 {
+		t.Errorf("npx command count = %d, want only initial add", len(runner.commands))
+	}
+}
+
+func TestManagerUpdateRestoresSkillWhenNpxFails(t *testing.T) {
+	manager, runner, _ := testManager(t, []map[string]string{{"SKILL.md": "old"}})
+	if err := manager.Add("unslop", "https://github.com/poteto/noodle"); err != nil {
+		t.Fatal(err)
+	}
+	runner.failAt = 2
+
+	if err := manager.Update("unslop"); err == nil {
+		t.Fatal("Update() error = nil, want npx failure")
+	}
+	path := filepath.Join(manager.ManagedHome, ".agents", "skills", "unslop", "SKILL.md")
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "old" {
+		t.Errorf("restored skill = %q, %v", data, err)
+	}
+}
+
+func TestManagerRemoveUsesTrackedOwnership(t *testing.T) {
+	manager, runner, _ := testManager(t, []map[string]string{{"SKILL.md": "managed"}})
+	if err := manager.Add("unslop", "https://github.com/poteto/noodle"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.Remove("unslop"); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	if len(runner.commands) != 2 {
+		t.Fatalf("commands = %d, want 2", len(runner.commands))
+	}
+	wantTail := []string{"--global", "--agent", "codex", "claude-code", "--yes"}
+	arguments := runner.commands[1].Arguments
+	if !slices.Equal(arguments[len(arguments)-len(wantTail):], wantTail) {
+		t.Errorf("remove arguments = %q", arguments)
+	}
+	for _, path := range []string{
+		filepath.Join(manager.ManagedHome, ".agents", "skills", "unslop"),
+		filepath.Join(manager.ManagedHome, ".claude", "skills", "unslop"),
+	} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("removed path %s still exists: %v", path, err)
+		}
+	}
+	catalog, err := Load(manager.CatalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Skills) != 0 {
+		t.Errorf("catalog = %#v, want empty", catalog)
+	}
+}
+
+func testManager(t *testing.T, versions []map[string]string) (Manager, *fakeRunner, string) {
+	t.Helper()
+	root := t.TempDir()
+	managedHome := filepath.Join(root, "files", "home")
+	if err := os.MkdirAll(managedHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{versions: versions}
+	var output bytes.Buffer
+	return Manager{
+		CatalogPath: filepath.Join(root, "skills.toml"),
+		ManagedHome: managedHome,
+		Stdout:      &output,
+		Stderr:      &output,
+		Runner:      runner,
+	}, runner, root
+}
+
+func argumentAfter(arguments []string, option string) string {
+	for index := range arguments {
+		if arguments[index] == option && index+1 < len(arguments) {
+			return arguments[index+1]
+		}
+	}
+	return ""
+}
