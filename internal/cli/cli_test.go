@@ -111,6 +111,28 @@ func TestApplyValidatesShellBeforeLinking(t *testing.T) {
 	}
 }
 
+func TestSetupDoesNotMislabelRemoteFailureAsLocalConflict(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	root := filepath.Join(t.TempDir(), "config")
+	missingRemote := filepath.Join(t.TempDir(), "missing.git")
+	var output bytes.Buffer
+	err := Run(
+		[]string{"--config-dir", root, "setup"},
+		bytes.NewBufferString(missingRemote+"\n\n"),
+		&output,
+		&output,
+		"test",
+	)
+	if err == nil {
+		t.Fatal("setup error = nil, want missing remote error")
+	}
+	if strings.Contains(err.Error(), "move it aside") {
+		t.Fatalf("setup mislabeled remote error as local conflict: %v", err)
+	}
+}
+
 func seedRemote(t *testing.T) string {
 	t.Helper()
 	remote := filepath.Join(t.TempDir(), "remote.git")

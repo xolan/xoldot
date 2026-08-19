@@ -129,11 +129,15 @@ func setup(paths config.Paths, input io.Reader, output, errorOutput io.Writer) e
 	if !hasHistory {
 		checkedOut, err := runner.CheckoutRemote("origin", branch)
 		if err != nil {
-			return fmt.Errorf(
-				"configuration directory conflicts with existing origin/%s; move it aside, rerun setup, then merge local files manually: %w",
-				branch,
-				err,
-			)
+			var checkoutErr *gitops.CheckoutError
+			if errors.As(err, &checkoutErr) {
+				return fmt.Errorf(
+					"configuration directory conflicts with existing origin/%s; move it aside, rerun setup, then merge local files manually: %w",
+					branch,
+					err,
+				)
+			}
+			return fmt.Errorf("inspect existing origin/%s before setup: %w", branch, err)
 		}
 		if checkedOut {
 			if err := writef(output, "Checked out existing origin/%s\n", branch); err != nil {

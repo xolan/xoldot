@@ -17,6 +17,18 @@ type Runner struct {
 	Stderr io.Writer
 }
 
+type CheckoutError struct {
+	err error
+}
+
+func (err *CheckoutError) Error() string {
+	return err.err.Error()
+}
+
+func (err *CheckoutError) Unwrap() error {
+	return err.err
+}
+
 func (runner Runner) Configure(remote, branch string) error {
 	if strings.TrimSpace(remote) == "" {
 		return fmt.Errorf("git remote URL cannot be empty")
@@ -90,7 +102,7 @@ func (runner Runner) CheckoutRemote(remote, branch string) (bool, error) {
 		return false, err
 	}
 	if err := runner.run("checkout", "-B", branch, "--track", remote+"/"+branch); err != nil {
-		return false, err
+		return false, &CheckoutError{err: err}
 	}
 	return true, nil
 }
@@ -147,7 +159,7 @@ func (runner Runner) output(arguments ...string) (string, error) {
 	var output bytes.Buffer
 	command := runner.command(arguments...)
 	command.Stdout = &output
-	command.Stderr = runner.Stderr
+	command.Stderr = io.Discard
 	if err := command.Run(); err != nil {
 		return "", err
 	}

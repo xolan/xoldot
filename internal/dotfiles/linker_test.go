@@ -86,6 +86,34 @@ func TestLinkRefusesOrdinaryFileConflict(t *testing.T) {
 	}
 }
 
+func TestLinkPlansAllTargetsBeforeMutation(t *testing.T) {
+	root := t.TempDir()
+	managed := filepath.Join(root, "managed")
+	home := filepath.Join(root, "home")
+	if err := os.MkdirAll(managed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(managed, ".a-managed"), []byte("managed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(managed, ".z-conflict"), []byte("managed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".z-conflict"), []byte("local"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Link(managed, home, filepath.Join(root, "config")); err == nil {
+		t.Fatal("Link() error = nil, want conflict")
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".a-managed")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("early target was linked before conflict detection, Lstat error = %v", err)
+	}
+}
+
 func TestLinkRefusesTargetInsideConfigRoot(t *testing.T) {
 	root := t.TempDir()
 	configRoot := filepath.Join(root, "home", ".config", "xoldot")
@@ -151,5 +179,45 @@ func TestLinkResolvesConfigRootBeforeRecursionCheck(t *testing.T) {
 	linkedManaged := filepath.Join(configLink, "files", "home")
 	if _, err := Link(linkedManaged, home, configLink); err == nil {
 		t.Fatal("Link() error = nil, want recursive target error through config symlink")
+	}
+}
+
+func TestLinkReplacementPreservesSimilarUserFile(t *testing.T) {
+	root := t.TempDir()
+	configRoot := filepath.Join(root, "config")
+	managed := filepath.Join(configRoot, "files", "home")
+	home := filepath.Join(root, "home")
+	if err := os.MkdirAll(managed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(managed, ".vimrc")
+	if err := os.WriteFile(source, []byte("managed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(home, ".vimrc")
+	if err := os.Symlink(filepath.Join(managed, "old-vimrc"), target); err != nil {
+		t.Fatal(err)
+	}
+	neighbor := target + ".xoldot-new"
+	if err := os.WriteFile(neighbor, []byte("user data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Link(managed, home, configRoot)
+	if err != nil {
+		t.Fatalf("Link() error = %v", err)
+	}
+	if result.Updated != 1 {
+		t.Errorf("updated = %d, want 1", result.Updated)
+	}
+	data, err := os.ReadFile(neighbor)
+	if err != nil {
+		t.Fatalf("read neighboring user file: %v", err)
+	}
+	if string(data) != "user data" {
+		t.Errorf("neighboring user file = %q", data)
 	}
 }

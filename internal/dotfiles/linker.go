@@ -15,6 +15,12 @@ type Result struct {
 	Current int
 }
 
+type plannedLink struct {
+	source string
+	target string
+	status linkStatus
+}
+
 func Link(managedRoot, home, configRoot string) (Result, error) {
 	managedRoot, err := filepath.Abs(managedRoot)
 	if err != nil {
@@ -48,7 +54,8 @@ func Link(managedRoot, home, configRoot string) (Result, error) {
 		return Result{}, fmt.Errorf("resolve config root symlinks: %w", err)
 	}
 
-	var result Result
+	var plans []plannedLink
+	var current int
 	err = filepath.WalkDir(managedRoot, func(source string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -79,35 +86,41 @@ func Link(managedRoot, home, configRoot string) (Result, error) {
 		if pathContains(configRoot, resolvedTarget) || pathContains(resolvedTarget, managedRoot) {
 			return fmt.Errorf("refusing recursive link %s -> %s", target, source)
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return fmt.Errorf("create target directory for %s: %w", target, err)
-		}
-
 		state, err := linkState(target, source, managedRoot)
 		if err != nil {
 			return err
 		}
 		switch state {
-		case linkCurrent:
-			result.Current++
-			return nil
 		case linkConflict:
 			return fmt.Errorf("target %s already exists and is not managed by xoldot", target)
-		case linkManaged:
-			if err := replaceSymlink(target, source); err != nil {
-				return err
-			}
-			result.Updated++
-		case linkMissing:
-			if err := os.Symlink(source, target); err != nil {
-				return fmt.Errorf("link %s to %s: %w", target, source, err)
-			}
-			result.Created++
+		case linkCurrent:
+			current++
+		default:
+			plans = append(plans, plannedLink{source: source, target: target, status: state})
 		}
 		return nil
 	})
 	if err != nil {
-		return result, fmt.Errorf("link managed home: %w", err)
+		return Result{}, fmt.Errorf("plan managed home links: %w", err)
+	}
+
+	result := Result{Current: current}
+	for _, plan := range plans {
+		if err := os.MkdirAll(filepath.Dir(plan.target), 0o755); err != nil {
+			return result, fmt.Errorf("create target directory for %s: %w", plan.target, err)
+		}
+		switch plan.status {
+		case linkManaged:
+			if err := replaceSymlink(plan.target, plan.source); err != nil {
+				return result, err
+			}
+			result.Updated++
+		case linkMissing:
+			if err := os.Symlink(plan.source, plan.target); err != nil {
+				return result, fmt.Errorf("link %s to %s: %w", plan.target, plan.source, err)
+			}
+			result.Created++
+		}
 	}
 	return result, nil
 }
@@ -151,15 +164,16 @@ func linkState(target, source, managedRoot string) (linkStatus, error) {
 }
 
 func replaceSymlink(target, source string) error {
-	temporary := target + ".xoldot-new"
-	if err := os.Remove(temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("clear temporary link %s: %w", temporary, err)
+	temporaryDir, err := os.MkdirTemp(filepath.Dir(target), ".xoldot-link-*")
+	if err != nil {
+		return fmt.Errorf("create temporary link directory for %s: %w", target, err)
 	}
+	defer func() { _ = os.RemoveAll(temporaryDir) }()
+	temporary := filepath.Join(temporaryDir, "link")
 	if err := os.Symlink(source, temporary); err != nil {
 		return fmt.Errorf("create temporary link %s: %w", temporary, err)
 	}
 	if err := os.Rename(temporary, target); err != nil {
-		_ = os.Remove(temporary)
 		return fmt.Errorf("replace link %s: %w", target, err)
 	}
 	return nil

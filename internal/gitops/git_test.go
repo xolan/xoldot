@@ -22,6 +22,9 @@ func TestSyncPushesInitialCommit(t *testing.T) {
 	if err := runner.Configure(remote, "main"); err != nil {
 		t.Fatalf("Configure() error = %v\n%s", err, output.String())
 	}
+	if strings.Contains(output.String(), "No such remote") {
+		t.Fatalf("Configure() leaked expected remote probe error:\n%s", output.String())
+	}
 	runGit(t, root, "config", "user.name", "Xoldot Test")
 	runGit(t, root, "config", "user.email", "xoldot@example.invalid")
 	if err := os.WriteFile(filepath.Join(root, "xoldot.toml"), []byte("test = true\n"), 0o644); err != nil {
