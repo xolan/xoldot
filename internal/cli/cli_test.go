@@ -133,6 +133,38 @@ func TestSetupDoesNotMislabelRemoteFailureAsLocalConflict(t *testing.T) {
 	}
 }
 
+func TestSkillsPluralAliasUpdatesEmptyCatalog(t *testing.T) {
+	root := t.TempDir()
+	if err := config.Initialize(config.NewPaths(root)); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := Run(
+		[]string{"--config-dir", root, "skills", "update"},
+		bytes.NewReader(nil),
+		&output,
+		&output,
+		"test",
+	); err != nil {
+		t.Fatalf("skills update error = %v", err)
+	}
+	if !strings.Contains(output.String(), "No skills to update") {
+		t.Errorf("output = %q", output.String())
+	}
+}
+
+func TestHelpIncludesSkillCommands(t *testing.T) {
+	var output bytes.Buffer
+	if err := Run([]string{"help"}, bytes.NewReader(nil), &output, &output, "test"); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range []string{"skill add", "skill remove", "skill update"} {
+		if !strings.Contains(output.String(), command) {
+			t.Errorf("help does not include %q", command)
+		}
+	}
+}
+
 func seedRemote(t *testing.T) string {
 	t.Helper()
 	remote := filepath.Join(t.TempDir(), "remote.git")

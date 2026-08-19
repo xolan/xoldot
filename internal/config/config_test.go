@@ -14,7 +14,7 @@ func TestInitializeCreatesDefaultLayout(t *testing.T) {
 		t.Fatalf("Initialize() error = %v", err)
 	}
 
-	for _, path := range []string{paths.Config, paths.Tools, paths.Aliases, paths.Bootstrap} {
+	for _, path := range []string{paths.Config, paths.Tools, paths.Aliases, paths.Skills, paths.Bootstrap} {
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("expected %s: %v", path, err)
 		}

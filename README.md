@@ -52,6 +52,7 @@ Setup creates this layout without overwriting files that already exist:
 ~/.config/xoldot/
 ├── xoldot.toml
 ├── profiles/
+├── skills.toml
 ├── files/
 │   ├── aliases.toml
 │   └── home/
@@ -119,6 +120,38 @@ Remove an entry with:
 xoldot tool remove ripgrep
 ```
 
+## Agent skills
+
+Skill commands manage global, home-folder agent skills. The shorthand form
+assumes a GitHub repository:
+
+```sh
+xoldot skill add unslop@poteto/noodle
+```
+
+An explicit source is also accepted:
+
+```sh
+xoldot skill add unslop --from https://github.com/poteto/noodle
+xoldot skill update unslop       # update one skill
+xoldot skills update             # update all; "skills" is an alias
+xoldot skill remove unslop
+```
+
+These commands require Node.js 22.20 or newer and `npx`. Development uses the
+Node version pinned by mise. xoldot delegates fetching to the pinned
+`skills@1.5.23` npm package, but redirects its global home into the managed
+tree. Canonical files therefore land in
+`files/home/.agents/skills/<skill>`. `skills.toml` records each source and a
+content digest; update and remove refuse to proceed if the canonical skill has
+local changes.
+
+For Claude compatibility, xoldot creates an ordinary directory hierarchy at
+`files/home/.claude/skills/<skill>` and a relative symlink for each individual
+skill file. It never creates a directory symlink. Run `xoldot apply` after an
+add, update, or removal to reconcile the corresponding links in your real
+home directory.
+
 ## Aliases
 
 Add or update an alias with:
@@ -164,9 +197,17 @@ mv ~/.config/git/config ~/.config/xoldot/files/home/.config/git/config
 xoldot apply
 ```
 
-Apply creates parent directories and absolute file symlinks. It is idempotent.
-It updates stale symlinks that point into xoldot's managed home, but refuses to
-overwrite ordinary files or unrelated symlinks.
+Apply creates parent directories and links each file individually. Ordinary
+managed files use absolute symlinks; managed relative file symlinks, such as
+the Claude compatibility links, stay relative after being mapped into the
+target home. Apply is idempotent and accepts an existing symlink only when its
+destination exactly matches the link xoldot would create. It refuses to
+overwrite ordinary files or any mismatched symlink.
+
+Applied links are recorded in `~/.local/state/xoldot/links.json`. If a managed
+file is removed, a later apply removes the stale home link only when its exact
+destination still matches that record. User-created or changed files and
+symlinks are left untouched.
 
 `XOLDOT_TARGET_HOME` overrides the destination home for isolated testing.
 

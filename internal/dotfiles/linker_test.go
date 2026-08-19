@@ -57,6 +57,145 @@ func TestLinkCreatesAndKeepsManagedLinks(t *testing.T) {
 	}
 }
 
+func TestLinkPreservesManagedRelativeFileSymlink(t *testing.T) {
+	root := t.TempDir()
+	configRoot := filepath.Join(root, "config")
+	managed := filepath.Join(configRoot, "files", "home")
+	home := filepath.Join(root, "home")
+	canonical := filepath.Join(managed, ".agents", "skills", "example", "SKILL.md")
+	compatibility := filepath.Join(managed, ".claude", "skills", "example", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(canonical), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(compatibility), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(canonical, []byte("managed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(filepath.Dir(compatibility), canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(relative, compatibility); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Link(managed, home, configRoot)
+	if err != nil {
+		t.Fatalf("Link() error = %v", err)
+	}
+	if result.Created != 2 {
+		t.Fatalf("created = %d, want 2", result.Created)
+	}
+	homeCompatibility := filepath.Join(home, ".claude", "skills", "example", "SKILL.md")
+	destination, err := os.Readlink(homeCompatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.Rel(filepath.Dir(homeCompatibility), filepath.Join(home, ".agents", "skills", "example", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if destination != want {
+		t.Errorf("compatibility destination = %q, want %q", destination, want)
+	}
+	data, err := os.ReadFile(homeCompatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "managed" {
+		t.Errorf("compatibility contents = %q", data)
+	}
+
+	if err := os.RemoveAll(filepath.Join(managed, ".agents", "skills", "example")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(managed, ".claude", "skills", "example")); err != nil {
+		t.Fatal(err)
+	}
+	result, err = Link(managed, home, configRoot)
+	if err != nil {
+		t.Fatalf("Link() after skill removal error = %v", err)
+	}
+	if result.Removed != 2 {
+		t.Errorf("removed = %d, want 2", result.Removed)
+	}
+	for _, target := range []string{
+		filepath.Join(home, ".agents", "skills", "example", "SKILL.md"),
+		homeCompatibility,
+	} {
+		if _, statErr := os.Lstat(target); !errors.Is(statErr, os.ErrNotExist) {
+			t.Errorf("stale skill link %s remains: %v", target, statErr)
+		}
+	}
+}
+
+func TestLinkMapsRelativeFileSymlinkThroughResolvedParents(t *testing.T) {
+	root := t.TempDir()
+	configRoot := filepath.Join(root, "config")
+	managed := filepath.Join(configRoot, "files", "home")
+	home := filepath.Join(root, "home")
+	actualAgents := filepath.Join(root, "actual-agents")
+	actualClaude := filepath.Join(root, "actual-claude")
+	for _, directory := range []string{home, actualAgents, actualClaude} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(actualAgents, filepath.Join(home, ".agents")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(actualClaude, filepath.Join(home, ".claude")); err != nil {
+		t.Fatal(err)
+	}
+
+	canonical := filepath.Join(managed, ".agents", "skills", "example", "SKILL.md")
+	compatibility := filepath.Join(managed, ".claude", "skills", "example", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(canonical), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(compatibility), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(canonical, []byte("managed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	managedDestination, err := filepath.Rel(filepath.Dir(compatibility), canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(managedDestination, compatibility); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Link(managed, home, configRoot); err != nil {
+		t.Fatalf("Link() error = %v", err)
+	}
+	compatibilityTarget := filepath.Join(actualClaude, "skills", "example", "SKILL.md")
+	destination, err := os.Readlink(compatibilityTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.Rel(
+		filepath.Dir(compatibilityTarget),
+		filepath.Join(actualAgents, "skills", "example", "SKILL.md"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if destination != want {
+		t.Errorf("compatibility destination = %q, want %q", destination, want)
+	}
+	data, err := os.ReadFile(compatibilityTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "managed" {
+		t.Errorf("compatibility contents = %q", data)
+	}
+}
+
 func TestLinkRefusesOrdinaryFileConflict(t *testing.T) {
 	root := t.TempDir()
 	managed := filepath.Join(root, "managed")
@@ -111,6 +250,129 @@ func TestLinkPlansAllTargetsBeforeMutation(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(home, ".a-managed")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("early target was linked before conflict detection, Lstat error = %v", err)
+	}
+}
+
+func TestLinkRemovesOnlyStaleLinksItStillOwns(t *testing.T) {
+	root := t.TempDir()
+	managed := filepath.Join(root, "managed")
+	home := filepath.Join(root, "home")
+	configRoot := filepath.Join(root, "config")
+	if err := os.MkdirAll(managed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(configRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(managed, ".owned")
+	if err := os.WriteFile(source, []byte("managed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Link(managed, home, configRoot); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(home, ".owned")
+	if err := os.Remove(source); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Link(managed, home, configRoot)
+	if err != nil {
+		t.Fatalf("Link() error = %v", err)
+	}
+	if result.Removed != 1 {
+		t.Errorf("removed = %d, want 1", result.Removed)
+	}
+	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("stale owned target remains: %v", err)
+	}
+
+	if err := os.WriteFile(source, []byte("managed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Link(managed, home, configRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(root, "other")
+	if err := os.WriteFile(other, []byte("other"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(source); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err = Link(managed, home, configRoot)
+	if err != nil {
+		t.Fatalf("Link() error = %v", err)
+	}
+	if result.Removed != 0 {
+		t.Errorf("removed = %d, want 0", result.Removed)
+	}
+	destination, err := os.Readlink(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if destination != other {
+		t.Errorf("user target destination = %q, want %q", destination, other)
+	}
+}
+
+func TestLinkRejectsLedgerTargetsOutsideHome(t *testing.T) {
+	root := t.TempDir()
+	managed := filepath.Join(root, "managed")
+	home := filepath.Join(root, "home")
+	configRoot := filepath.Join(root, "config")
+	for _, directory := range []string{managed, home, configRoot} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outsideSource := filepath.Join(managed, "old")
+	outsideTarget := filepath.Join(root, "outside")
+	if err := os.Symlink(outsideSource, outsideTarget); err != nil {
+		t.Fatal(err)
+	}
+	ledgerPath := filepath.Join(home, ".local", "state", "xoldot", "links.json")
+	if err := os.MkdirAll(filepath.Dir(ledgerPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ledger := `{"version":1,"links":[{"target":"` + outsideTarget + `","destination":"` + outsideSource + `"}]}`
+	if err := os.WriteFile(ledgerPath, []byte(ledger), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Link(managed, home, configRoot); err == nil || !strings.Contains(err.Error(), "outside the target home") {
+		t.Fatalf("Link() error = %v, want invalid ledger error", err)
+	}
+	if _, err := os.Lstat(outsideTarget); err != nil {
+		t.Errorf("outside target was changed: %v", err)
+	}
+}
+
+func TestLinkReservesItsLedgerPath(t *testing.T) {
+	root := t.TempDir()
+	managed := filepath.Join(root, "managed")
+	home := filepath.Join(root, "home")
+	configRoot := filepath.Join(root, "config")
+	source := filepath.Join(managed, ".local", "state", "xoldot", "links.json")
+	if err := os.MkdirAll(filepath.Dir(source), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, []byte("managed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(configRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Link(managed, home, configRoot); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("Link() error = %v, want reserved path error", err)
 	}
 }
 
@@ -182,7 +444,7 @@ func TestLinkResolvesConfigRootBeforeRecursionCheck(t *testing.T) {
 	}
 }
 
-func TestLinkReplacementPreservesSimilarUserFile(t *testing.T) {
+func TestLinkRefusesMismatchedManagedSymlink(t *testing.T) {
 	root := t.TempDir()
 	configRoot := filepath.Join(root, "config")
 	managed := filepath.Join(configRoot, "files", "home")
@@ -197,27 +459,23 @@ func TestLinkReplacementPreservesSimilarUserFile(t *testing.T) {
 	if err := os.WriteFile(source, []byte("managed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	target := filepath.Join(home, ".vimrc")
-	if err := os.Symlink(filepath.Join(managed, "old-vimrc"), target); err != nil {
+	oldSource := filepath.Join(managed, "old-vimrc")
+	if err := os.WriteFile(oldSource, []byte("old managed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	neighbor := target + ".xoldot-new"
-	if err := os.WriteFile(neighbor, []byte("user data"), 0o644); err != nil {
+	target := filepath.Join(home, ".vimrc")
+	if err := os.Symlink(oldSource, target); err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := Link(managed, home, configRoot)
+	if _, err := Link(managed, home, configRoot); err == nil {
+		t.Fatal("Link() error = nil, want conflict")
+	}
+	destination, err := os.Readlink(target)
 	if err != nil {
-		t.Fatalf("Link() error = %v", err)
+		t.Fatalf("Readlink() error = %v", err)
 	}
-	if result.Updated != 1 {
-		t.Errorf("updated = %d, want 1", result.Updated)
-	}
-	data, err := os.ReadFile(neighbor)
-	if err != nil {
-		t.Fatalf("read neighboring user file: %v", err)
-	}
-	if string(data) != "user data" {
-		t.Errorf("neighboring user file = %q", data)
+	if destination != oldSource {
+		t.Errorf("link destination = %q, want unchanged %q", destination, oldSource)
 	}
 }

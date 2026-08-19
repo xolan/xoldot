@@ -14,6 +14,7 @@ import (
 	"github.com/xolan/xoldot/internal/config"
 	"github.com/xolan/xoldot/internal/dotfiles"
 	"github.com/xolan/xoldot/internal/gitops"
+	agentskills "github.com/xolan/xoldot/internal/skills"
 	toolcatalog "github.com/xolan/xoldot/internal/tools"
 )
 
@@ -42,6 +43,8 @@ func Run(arguments []string, input io.Reader, output, errorOutput io.Writer, ver
 		return tool(paths, arguments[1:], output)
 	case "alias":
 		return alias(paths, arguments[1:], output)
+	case "skill", "skills":
+		return skill(paths, arguments[1:], input, output, errorOutput)
 	case "apply":
 		if len(arguments) != 1 {
 			return fmt.Errorf("usage: xoldot apply")
@@ -232,6 +235,46 @@ func alias(paths config.Paths, arguments []string, output io.Writer) error {
 	return writef(output, "%s alias %s\n", verb, arguments[1])
 }
 
+func skill(paths config.Paths, arguments []string, input io.Reader, output, errorOutput io.Writer) error {
+	if _, err := config.Load(paths.Config); err != nil {
+		return err
+	}
+	if len(arguments) == 0 {
+		return fmt.Errorf("usage: xoldot skill <add|remove|update>")
+	}
+	manager := agentskills.Manager{
+		CatalogPath: paths.Skills,
+		ManagedHome: paths.ManagedHome,
+		Stdin:       input,
+		Stdout:      output,
+		Stderr:      errorOutput,
+	}
+	switch arguments[0] {
+	case "add":
+		name, source, err := agentskills.ParseAddArguments(arguments[1:])
+		if err != nil {
+			return err
+		}
+		return manager.Add(name, source)
+	case "remove":
+		if len(arguments) != 2 {
+			return fmt.Errorf("usage: xoldot skill remove <skill>")
+		}
+		return manager.Remove(arguments[1])
+	case "update":
+		if len(arguments) > 2 {
+			return fmt.Errorf("usage: xoldot skill update [skill]")
+		}
+		name := ""
+		if len(arguments) == 2 {
+			name = arguments[1]
+		}
+		return manager.Update(name)
+	default:
+		return fmt.Errorf("usage: xoldot skill <add|remove|update>")
+	}
+}
+
 func apply(paths config.Paths, input io.Reader, output, errorOutput io.Writer) error {
 	cfg, err := config.Load(paths.Config)
 	if err != nil {
@@ -273,7 +316,7 @@ func apply(paths config.Paths, input io.Reader, output, errorOutput io.Writer) e
 	if err != nil {
 		return err
 	}
-	if err := writef(output, "dotfiles: %d linked, %d updated, %d already current\n", linked.Created, linked.Updated, linked.Current); err != nil {
+	if err := writef(output, "dotfiles: %d linked, %d removed, %d already current\n", linked.Created, linked.Removed, linked.Current); err != nil {
 		return err
 	}
 	if err := aliases.Render(aliasPath, shell, file.Aliases); err != nil {
@@ -312,13 +355,17 @@ func writef(output io.Writer, format string, arguments ...any) error {
 	return nil
 }
 
-const usage = `xoldot manages tools, aliases, and home dotfile links.
+const usage = `xoldot manages tools, aliases, agent skills, and home dotfile links.
 
 Usage:
   xoldot [--config-dir DIR] setup
   xoldot [--config-dir DIR] tool add <tool>
   xoldot [--config-dir DIR] tool remove <tool>
   xoldot [--config-dir DIR] alias add <alias> <command>
+  xoldot [--config-dir DIR] skill add <skill>@<owner>/<repo>
+  xoldot [--config-dir DIR] skill add <skill> --from <source>
+  xoldot [--config-dir DIR] skill remove <skill>
+  xoldot [--config-dir DIR] skill update [skill]
   xoldot [--config-dir DIR] apply
   xoldot [--config-dir DIR] sync
   xoldot version

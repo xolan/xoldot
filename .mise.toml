@@ -4,6 +4,7 @@ min_version = "2026.8.3"
 actionlint = "1.7.12"
 go = "1.26.6"
 golangci-lint = "2.12.2"
+node = "24.19.0"
 
 [tasks.tidy]
 description = "Update Go module metadata"
