@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality / ${{ matrix.task }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        task: [fmt-check, lint, actions-lint]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install mise tools
+        uses: jdx/mise-action@v3
+      - name: Run ${{ matrix.task }}
+        run: mise run ${{ matrix.task }}
+
+  test:
+    name: Test / ${{ matrix.platform }}
+    needs: quality
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: macos-latest
+            platform: macos
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install mise tools
+        uses: jdx/mise-action@v3
+      - name: Run tests
+        run: mise run test
+
+  build:
+    name: Build / ${{ matrix.platform }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: macos-latest
+            platform: macos
+    env:
+      VERSION: ci-${{ github.sha }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install mise tools
+        uses: jdx/mise-action@v3
+      - name: Build archive
+        run: mise run archive
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: xoldot-${{ matrix.platform }}
+          path: dist/xoldot-${{ env.VERSION }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
