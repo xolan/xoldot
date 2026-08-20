@@ -80,11 +80,10 @@ func TestCheckoutRemoteRestoresExistingConfiguration(t *testing.T) {
 	}
 }
 
-func TestCommandUsesConfiguredInput(t *testing.T) {
-	input := strings.NewReader("credential\n")
-	runner := Runner{Stdin: input, Dir: t.TempDir()}
-	if got := runner.command("status").Stdin; got != input {
-		t.Errorf("command stdin = %T, want configured reader", got)
+func TestCommandLeavesStdinNil(t *testing.T) {
+	runner := Runner{Dir: t.TempDir()}
+	if got := runner.command("status").Stdin; got != nil {
+		t.Errorf("command stdin = %T, want nil (non-file stdin hangs Wait)", got)
 	}
 }
 

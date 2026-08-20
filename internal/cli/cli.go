@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/spf13/cobra"
+
 	"github.com/xolan/xoldot/internal/aliases"
 	"github.com/xolan/xoldot/internal/config"
 	"github.com/xolan/xoldot/internal/dotfiles"
@@ -18,83 +20,206 @@ import (
 	toolcatalog "github.com/xolan/xoldot/internal/tools"
 )
 
+type app struct {
+	input       io.Reader
+	output      io.Writer
+	errorOutput io.Writer
+	configDir   string
+	verbose     bool
+	style       styler
+}
+
 func Run(arguments []string, input io.Reader, output, errorOutput io.Writer, version string) error {
-	root, arguments, err := parseGlobal(arguments)
+	application := &app{input: input, output: output, errorOutput: errorOutput, style: newStyler(output)}
+	root := application.rootCommand(version)
+	root.SetArgs(arguments)
+	root.SetOut(output)
+	root.SetErr(errorOutput)
+	return root.Execute()
+}
+
+func (a *app) rootCommand(version string) *cobra.Command {
+	root := &cobra.Command{
+		Use:           "xoldot",
+		Short:         "Manage tools, aliases, agent skills, and home dotfile links",
+		Version:       version,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Example: `  xoldot setup
+  xoldot tool add ripgrep
+  xoldot alias add ll 'ls -la'
+  xoldot skill add code-review@owner/repo
+  xoldot skill add code-review --from ./skills/code-review
+  xoldot skill remove code-review
+  xoldot skill update
+  xoldot apply --dry
+  xoldot sync --dry`,
+	}
+	root.PersistentFlags().StringVar(&a.configDir, "config-dir", "", "configuration directory (defaults to the xoldot config home)")
+	root.PersistentFlags().BoolVarP(&a.verbose, "verbose", "v", false, "log underlying git and npx commands")
+
+	root.AddCommand(&cobra.Command{
+		Use:   "version",
+		Short: "Print the xoldot version",
+		Args:  cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			return writef(a.output, "%s\n", version)
+		},
+	})
+
+	root.AddCommand(&cobra.Command{
+		Use:   "setup",
+		Short: "Create the configuration directory and optionally enable git sync",
+		Args:  cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			return a.setup()
+		},
+	})
+
+	toolCommand := &cobra.Command{Use: "tool", Short: "Manage the tool catalog"}
+	toolCommand.AddCommand(
+		&cobra.Command{
+			Use:   "add <tool>",
+			Short: "Add a tool to the catalog",
+			Args:  cobra.ExactArgs(1),
+			RunE: func(_ *cobra.Command, arguments []string) error {
+				return a.toolAdd(arguments[0])
+			},
+		},
+		&cobra.Command{
+			Use:   "remove <tool>",
+			Short: "Remove a tool from the catalog",
+			Args:  cobra.ExactArgs(1),
+			RunE: func(_ *cobra.Command, arguments []string) error {
+				return a.toolRemove(arguments[0])
+			},
+		},
+	)
+	root.AddCommand(toolCommand)
+
+	aliasCommand := &cobra.Command{Use: "alias", Short: "Manage shell aliases"}
+	aliasCommand.AddCommand(&cobra.Command{
+		Use:   "add <alias> <command>",
+		Short: "Add or update a shell alias",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, arguments []string) error {
+			return a.aliasAdd(arguments[0], arguments[1])
+		},
+	})
+	root.AddCommand(aliasCommand)
+
+	skillCommand := &cobra.Command{Use: "skill", Aliases: []string{"skills"}, Short: "Manage global agent skills"}
+	var skillSource string
+	skillAdd := &cobra.Command{
+		Use:   "add <skill>[@<owner>/<repo>]",
+		Short: "Install a skill and add it to the catalog",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, arguments []string) error {
+			raw := []string{arguments[0]}
+			if skillSource != "" {
+				raw = append(raw, "--from", skillSource)
+			}
+			name, source, err := agentskills.ParseAddArguments(raw)
+			if err != nil {
+				return err
+			}
+			manager, err := a.skillManager()
+			if err != nil {
+				return err
+			}
+			return manager.Add(name, source)
+		},
+	}
+	skillAdd.Flags().StringVar(&skillSource, "from", "", "install the skill from an explicit source")
+	skillCommand.AddCommand(
+		skillAdd,
+		&cobra.Command{
+			Use:   "remove <skill>",
+			Short: "Uninstall a skill and drop it from the catalog",
+			Args:  cobra.ExactArgs(1),
+			RunE: func(_ *cobra.Command, arguments []string) error {
+				manager, err := a.skillManager()
+				if err != nil {
+					return err
+				}
+				return manager.Remove(arguments[0])
+			},
+		},
+		&cobra.Command{
+			Use:   "update [skill]",
+			Short: "Update one skill, or all of them",
+			Args:  cobra.MaximumNArgs(1),
+			RunE: func(_ *cobra.Command, arguments []string) error {
+				manager, err := a.skillManager()
+				if err != nil {
+					return err
+				}
+				name := ""
+				if len(arguments) == 1 {
+					name = arguments[0]
+				}
+				return manager.Update(name)
+			},
+		},
+	)
+	root.AddCommand(skillCommand)
+
+	var applyDry bool
+	applyCommand := &cobra.Command{
+		Use:   "apply",
+		Short: "Install tools, link dotfiles, and render aliases",
+		Args:  cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			return a.apply(applyDry)
+		},
+	}
+	applyCommand.Flags().BoolVar(&applyDry, "dry", false, "show what would change without changing it")
+	root.AddCommand(applyCommand)
+
+	var syncDry bool
+	syncCommand := &cobra.Command{
+		Use:   "sync",
+		Short: "Commit, pull, and push the configuration repository",
+		Args:  cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			return a.sync(syncDry)
+		},
+	}
+	syncCommand.Flags().BoolVar(&syncDry, "dry", false, "show what would change without changing it")
+	root.AddCommand(syncCommand)
+
+	return root
+}
+
+func (a *app) paths() (config.Paths, error) {
+	root := strings.TrimSpace(a.configDir)
+	if root == "" {
+		var err error
+		root, err = config.DefaultRoot()
+		if err != nil {
+			return config.Paths{}, err
+		}
+	} else {
+		var err error
+		root, err = filepath.Abs(root)
+		if err != nil {
+			return config.Paths{}, fmt.Errorf("resolve --config-dir: %w", err)
+		}
+	}
+	return config.NewPaths(root), nil
+}
+
+func (a *app) gitRunner(root string) gitops.Runner {
+	return gitops.Runner{Dir: root, Stdout: a.output, Stderr: a.errorOutput, Verbose: a.verbose}
+}
+
+func (a *app) setup() error {
+	paths, err := a.paths()
 	if err != nil {
 		return err
 	}
-	paths := config.NewPaths(root)
-
-	if len(arguments) == 0 {
-		return write(output, usage)
-	}
-
-	switch arguments[0] {
-	case "help", "-h", "--help":
-		return write(output, usage)
-	case "version", "--version":
-		return writef(output, "%s\n", version)
-	case "setup":
-		if len(arguments) != 1 {
-			return fmt.Errorf("usage: xoldot setup")
-		}
-		return setup(paths, input, output, errorOutput)
-	case "tool":
-		return tool(paths, arguments[1:], output)
-	case "alias":
-		return alias(paths, arguments[1:], output)
-	case "skill", "skills":
-		return skill(paths, arguments[1:], input, output, errorOutput)
-	case "apply":
-		dry, err := parseDry("apply", arguments[1:])
-		if err != nil {
-			return err
-		}
-		return apply(paths, input, output, errorOutput, dry)
-	case "sync":
-		dry, err := parseDry("sync", arguments[1:])
-		if err != nil {
-			return err
-		}
-		return sync(paths, input, output, errorOutput, dry)
-	default:
-		return fmt.Errorf("unknown command %q; run 'xoldot help'", arguments[0])
-	}
-}
-
-func parseDry(command string, arguments []string) (bool, error) {
-	switch {
-	case len(arguments) == 0:
-		return false, nil
-	case len(arguments) == 1 && arguments[0] == "--dry":
-		return true, nil
-	default:
-		return false, fmt.Errorf("usage: xoldot %s [--dry]", command)
-	}
-}
-
-func parseGlobal(arguments []string) (string, []string, error) {
-	root, err := config.DefaultRoot()
-	if err != nil {
-		return "", nil, err
-	}
-	if len(arguments) > 0 && arguments[0] == "--config-dir" {
-		if len(arguments) < 2 || strings.TrimSpace(arguments[1]) == "" {
-			return "", nil, fmt.Errorf("--config-dir requires a directory")
-		}
-		root, err = filepath.Abs(arguments[1])
-		if err != nil {
-			return "", nil, fmt.Errorf("resolve --config-dir: %w", err)
-		}
-		arguments = arguments[2:]
-	}
-	return root, arguments, nil
-}
-
-func setup(paths config.Paths, input io.Reader, output, errorOutput io.Writer) error {
 	cfg := config.Default()
 	if _, statErr := os.Stat(paths.Config); statErr == nil {
-		var err error
 		cfg, err = config.Load(paths.Config)
 		if err != nil {
 			return err
@@ -104,15 +229,15 @@ func setup(paths config.Paths, input io.Reader, output, errorOutput io.Writer) e
 	}
 	git := cfg.GitSettings()
 
-	if err := writef(output, "Configuration directory: %s\n", paths.Root); err != nil {
+	if err := writef(a.output, "Configuration directory: %s\n", a.style.bold(paths.Root)); err != nil {
 		return err
 	}
-	reader := bufio.NewReader(input)
+	reader := bufio.NewReader(a.input)
 	remotePrompt := "Git remote URL (leave blank to keep Git disabled): "
 	if git.Enabled {
 		remotePrompt = "Git remote URL (leave blank to keep the current remote): "
 	}
-	remoteURL, err := prompt(reader, output, remotePrompt)
+	remoteURL, err := prompt(reader, a.output, a.style.bold(remotePrompt))
 	if err != nil {
 		return err
 	}
@@ -121,20 +246,19 @@ func setup(paths config.Paths, input io.Reader, output, errorOutput io.Writer) e
 			return err
 		}
 		if git.Enabled {
-			return write(output, "Git remains enabled\n")
-		} else {
-			return write(output, "Git remains disabled; run setup again when a remote is ready\n")
+			return writef(a.output, "%s\n", a.style.success("Git remains enabled"))
 		}
+		return writef(a.output, "%s\n", a.style.warn("Git remains disabled; run setup again when a remote is ready"))
 	}
 
-	branch, err := prompt(reader, output, fmt.Sprintf("Git branch [%s]: ", git.Branch))
+	branch, err := prompt(reader, a.output, a.style.bold(fmt.Sprintf("Git branch [%s]: ", git.Branch)))
 	if err != nil {
 		return err
 	}
 	if branch == "" {
 		branch = git.Branch
 	}
-	runner := gitops.Runner{Stdin: reader, Dir: paths.Root, Stdout: output, Stderr: errorOutput}
+	runner := a.gitRunner(paths.Root)
 	if err := runner.Configure(remoteURL, branch); err != nil {
 		return err
 	}
@@ -156,7 +280,7 @@ func setup(paths config.Paths, input io.Reader, output, errorOutput io.Writer) e
 			return fmt.Errorf("inspect existing origin/%s before setup: %w", branch, err)
 		}
 		if checkedOut {
-			if err := writef(output, "Checked out existing origin/%s\n", branch); err != nil {
+			if err := writef(a.output, "%s\n", a.style.success(fmt.Sprintf("Checked out existing origin/%s", branch))); err != nil {
 				return err
 			}
 		}
@@ -175,7 +299,7 @@ func setup(paths config.Paths, input io.Reader, output, errorOutput io.Writer) e
 	if err := config.Save(paths.Config, cfg); err != nil {
 		return err
 	}
-	return writef(output, "Git enabled with origin on branch %s\n", branch)
+	return writef(a.output, "%s\n", a.style.success(fmt.Sprintf("Git enabled with origin on branch %s", branch)))
 }
 
 func prompt(reader *bufio.Reader, output io.Writer, message string) (string, error) {
@@ -189,52 +313,62 @@ func prompt(reader *bufio.Reader, output io.Writer, message string) (string, err
 	return strings.TrimSpace(answer), nil
 }
 
-func tool(paths config.Paths, arguments []string, output io.Writer) error {
-	if _, err := config.Load(paths.Config); err != nil {
-		return err
+func (a *app) toolCatalog() (config.Paths, toolcatalog.Catalog, error) {
+	paths, err := a.paths()
+	if err != nil {
+		return config.Paths{}, toolcatalog.Catalog{}, err
 	}
-	if len(arguments) != 2 {
-		return fmt.Errorf("usage: xoldot tool <add|remove> <tool>")
+	if _, err := config.Load(paths.Config); err != nil {
+		return config.Paths{}, toolcatalog.Catalog{}, err
 	}
 	catalog, err := toolcatalog.Load(paths.Tools)
 	if err != nil {
-		return err
+		return config.Paths{}, toolcatalog.Catalog{}, err
 	}
-	name := arguments[1]
-	switch arguments[0] {
-	case "add":
-		if err := toolcatalog.Add(&catalog, name); err != nil {
-			return err
-		}
-		if err := toolcatalog.Save(paths.Tools, catalog); err != nil {
-			return err
-		}
-		return writef(output, "Added tool %s; edit %s to set install commands\n", name, paths.Tools)
-	case "remove":
-		if !toolcatalog.Remove(&catalog, name) {
-			return fmt.Errorf("tool %q does not exist", name)
-		}
-		if err := toolcatalog.Save(paths.Tools, catalog); err != nil {
-			return err
-		}
-		return writef(output, "Removed tool %s\n", name)
-	default:
-		return fmt.Errorf("usage: xoldot tool <add|remove> <tool>")
-	}
+	return paths, catalog, nil
 }
 
-func alias(paths config.Paths, arguments []string, output io.Writer) error {
-	if _, err := config.Load(paths.Config); err != nil {
+func (a *app) toolAdd(name string) error {
+	paths, catalog, err := a.toolCatalog()
+	if err != nil {
 		return err
 	}
-	if len(arguments) != 3 || arguments[0] != "add" {
-		return fmt.Errorf("usage: xoldot alias add <alias> <command>")
+	if err := toolcatalog.Add(&catalog, name); err != nil {
+		return err
+	}
+	if err := toolcatalog.Save(paths.Tools, catalog); err != nil {
+		return err
+	}
+	return writef(a.output, "%s; edit %s to set install commands\n", a.style.success("Added tool "+name), paths.Tools)
+}
+
+func (a *app) toolRemove(name string) error {
+	paths, catalog, err := a.toolCatalog()
+	if err != nil {
+		return err
+	}
+	if !toolcatalog.Remove(&catalog, name) {
+		return fmt.Errorf("tool %q does not exist", name)
+	}
+	if err := toolcatalog.Save(paths.Tools, catalog); err != nil {
+		return err
+	}
+	return writef(a.output, "%s\n", a.style.success("Removed tool "+name))
+}
+
+func (a *app) aliasAdd(name, command string) error {
+	paths, err := a.paths()
+	if err != nil {
+		return err
+	}
+	if _, err := config.Load(paths.Config); err != nil {
+		return err
 	}
 	file, err := aliases.Load(paths.Aliases)
 	if err != nil {
 		return err
 	}
-	updated, err := aliases.Add(&file, arguments[1], arguments[2])
+	updated, err := aliases.Add(&file, name, command)
 	if err != nil {
 		return err
 	}
@@ -245,50 +379,32 @@ func alias(paths config.Paths, arguments []string, output io.Writer) error {
 	if updated {
 		verb = "Updated"
 	}
-	return writef(output, "%s alias %s\n", verb, arguments[1])
+	return writef(a.output, "%s\n", a.style.success(fmt.Sprintf("%s alias %s", verb, name)))
 }
 
-func skill(paths config.Paths, arguments []string, input io.Reader, output, errorOutput io.Writer) error {
+func (a *app) skillManager() (agentskills.Manager, error) {
+	paths, err := a.paths()
+	if err != nil {
+		return agentskills.Manager{}, err
+	}
 	if _, err := config.Load(paths.Config); err != nil {
-		return err
+		return agentskills.Manager{}, err
 	}
-	if len(arguments) == 0 {
-		return fmt.Errorf("usage: xoldot skill <add|remove|update>")
-	}
-	manager := agentskills.Manager{
+	return agentskills.Manager{
 		CatalogPath: paths.Skills,
 		ManagedHome: paths.ManagedHome,
-		Stdin:       input,
-		Stdout:      output,
-		Stderr:      errorOutput,
-	}
-	switch arguments[0] {
-	case "add":
-		name, source, err := agentskills.ParseAddArguments(arguments[1:])
-		if err != nil {
-			return err
-		}
-		return manager.Add(name, source)
-	case "remove":
-		if len(arguments) != 2 {
-			return fmt.Errorf("usage: xoldot skill remove <skill>")
-		}
-		return manager.Remove(arguments[1])
-	case "update":
-		if len(arguments) > 2 {
-			return fmt.Errorf("usage: xoldot skill update [skill]")
-		}
-		name := ""
-		if len(arguments) == 2 {
-			name = arguments[1]
-		}
-		return manager.Update(name)
-	default:
-		return fmt.Errorf("usage: xoldot skill <add|remove|update>")
-	}
+		Stdin:       a.input,
+		Stdout:      a.output,
+		Stderr:      a.errorOutput,
+		Verbose:     a.verbose,
+	}, nil
 }
 
-func apply(paths config.Paths, input io.Reader, output, errorOutput io.Writer, dry bool) error {
+func (a *app) apply(dry bool) error {
+	paths, err := a.paths()
+	if err != nil {
+		return err
+	}
 	cfg, err := config.Load(paths.Config)
 	if err != nil {
 		return err
@@ -322,30 +438,34 @@ func apply(paths config.Paths, input io.Reader, output, errorOutput io.Writer, d
 	}
 	aliasPath := filepath.Join(aliasDir, "alias."+shell)
 
-	if err := toolcatalog.Apply(catalog, toolcatalog.CurrentPlatform(), input, output, errorOutput, dry); err != nil {
+	if err := toolcatalog.Apply(catalog, toolcatalog.CurrentPlatform(), a.input, a.output, a.errorOutput, dry); err != nil {
 		return err
 	}
-	linked, err := dotfiles.Link(paths.ManagedHome, home, paths.Root, output, dry)
+	linked, err := dotfiles.Link(paths.ManagedHome, home, paths.Root, a.output, dry)
 	if err != nil {
 		return err
 	}
-	summary := "dotfiles: %d linked, %d removed, %d already current\n"
 	if dry {
-		summary = "dotfiles: would link %d, would remove %d, %d already current\n"
+		if err := writef(a.output, "dotfiles: would link %d, would remove %d, %d already current\n", linked.Created, linked.Removed, linked.Current); err != nil {
+			return err
+		}
+		return writef(a.output, "aliases: would render %s\n", aliasPath)
 	}
-	if err := writef(output, summary, linked.Created, linked.Removed, linked.Current); err != nil {
+	summary := fmt.Sprintf("dotfiles: %d linked, %d removed, %d already current", linked.Created, linked.Removed, linked.Current)
+	if err := writef(a.output, "%s\n", a.style.success(summary)); err != nil {
 		return err
-	}
-	if dry {
-		return writef(output, "aliases: would render %s\n", aliasPath)
 	}
 	if err := aliases.Render(aliasPath, shell, file.Aliases); err != nil {
 		return err
 	}
-	return writef(output, "aliases: rendered %s\n", aliasPath)
+	return writef(a.output, "%s\n", a.style.success("aliases: rendered "+aliasPath))
 }
 
-func sync(paths config.Paths, input io.Reader, output, errorOutput io.Writer, dry bool) error {
+func (a *app) sync(dry bool) error {
+	paths, err := a.paths()
+	if err != nil {
+		return err
+	}
 	cfg, err := config.Load(paths.Config)
 	if err != nil {
 		return err
@@ -354,14 +474,13 @@ func sync(paths config.Paths, input io.Reader, output, errorOutput io.Writer, dr
 	if !git.Enabled {
 		return fmt.Errorf("git is disabled; run 'xoldot setup' with a remote URL")
 	}
-	runner := gitops.Runner{Stdin: input, Dir: paths.Root, Stdout: output, Stderr: errorOutput}
-	if err := runner.Sync(git.Remote, git.Branch, dry); err != nil {
+	if err := a.gitRunner(paths.Root).Sync(git.Remote, git.Branch, dry); err != nil {
 		return err
 	}
 	if dry {
-		return write(output, "Dry run complete; nothing was changed\n")
+		return write(a.output, "Dry run complete; nothing was changed\n")
 	}
-	return write(output, "Sync complete\n")
+	return writef(a.output, "%s\n", a.style.success("Sync complete"))
 }
 
 func write(output io.Writer, value string) error {
@@ -377,19 +496,3 @@ func writef(output io.Writer, format string, arguments ...any) error {
 	}
 	return nil
 }
-
-const usage = `xoldot manages tools, aliases, agent skills, and home dotfile links.
-
-Usage:
-  xoldot [--config-dir DIR] setup
-  xoldot [--config-dir DIR] tool add <tool>
-  xoldot [--config-dir DIR] tool remove <tool>
-  xoldot [--config-dir DIR] alias add <alias> <command>
-  xoldot [--config-dir DIR] skill add <skill>@<owner>/<repo>
-  xoldot [--config-dir DIR] skill add <skill> --from <source>
-  xoldot [--config-dir DIR] skill remove <skill>
-  xoldot [--config-dir DIR] skill update [skill]
-  xoldot [--config-dir DIR] apply [--dry]
-  xoldot [--config-dir DIR] sync [--dry]
-  xoldot version
-`

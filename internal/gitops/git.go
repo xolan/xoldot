@@ -11,10 +11,10 @@ import (
 )
 
 type Runner struct {
-	Stdin  io.Reader
-	Dir    string
-	Stdout io.Writer
-	Stderr io.Writer
+	Dir     string
+	Stdout  io.Writer
+	Stderr  io.Writer
+	Verbose bool
 }
 
 type CheckoutError struct {
@@ -213,9 +213,14 @@ func (runner Runner) output(arguments ...string) (string, error) {
 }
 
 func (runner Runner) command(arguments ...string) *exec.Cmd {
+	if runner.Verbose && runner.Stderr != nil {
+		fmt.Fprintf(runner.Stderr, "+ git %s\n", strings.Join(arguments, " "))
+	}
+	// Stdin stays nil: a non-*os.File stdin makes exec.Cmd copy in a
+	// goroutine that Wait blocks on until the next terminal read returns,
+	// hanging every git command. Git prompts via /dev/tty regardless.
 	command := exec.Command("git", arguments...)
 	command.Dir = runner.Dir
-	command.Stdin = runner.Stdin
 	return command
 }
 

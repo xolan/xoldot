@@ -56,6 +56,7 @@ type Manager struct {
 	Stdin       io.Reader
 	Stdout      io.Writer
 	Stderr      io.Writer
+	Verbose     bool
 	Runner      Runner
 }
 
@@ -236,6 +237,9 @@ func (manager Manager) run(arguments ...string) error {
 	runner := manager.Runner
 	if runner == nil {
 		runner = ExecRunner{}
+	}
+	if manager.Verbose && manager.Stderr != nil {
+		fmt.Fprintf(manager.Stderr, "+ npx %s\n", strings.Join(arguments, " "))
 	}
 	return runner.Run(Command{
 		Arguments:   arguments,
