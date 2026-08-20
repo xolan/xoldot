@@ -36,6 +36,9 @@ Setup creates any missing files in this layout:
 └── tools.toml
 ```
 
+The `profiles/` directory is reserved for future use. Profiles are not
+implemented yet.
+
 Enter a Git remote URL when prompted to enable sync. Leave it blank to keep
 Git disabled. If the remote already has a `main` branch, setup checks it out
 before creating the missing files.
@@ -229,8 +232,8 @@ commands.
   directory.
 - `NO_COLOR` or `TERM=dumb` disables color.
 
-Profiles, conflict backup or force modes, and shells other than Bash, Zsh, and
-Fish are not supported yet.
+Conflict backup or force modes and shells other than Bash, Zsh, and Fish are
+not supported yet.
 
 ## Development
 
