@@ -1,4 +1,4 @@
-package dotfiles
+package managedhome
 
 import (
 	"encoding/json"

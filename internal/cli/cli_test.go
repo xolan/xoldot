@@ -42,10 +42,10 @@ func TestSetupWithoutRemoteThenAliasToolAndApply(t *testing.T) {
 
 	destination, err := os.Readlink(filepath.Join(home, ".example"))
 	if err != nil {
-		t.Fatalf("dotfile link error = %v", err)
+		t.Fatalf("managed home link error = %v", err)
 	}
 	if destination != managedFile {
-		t.Errorf("dotfile destination = %q, want %q", destination, managedFile)
+		t.Errorf("managed home destination = %q, want %q", destination, managedFile)
 	}
 	aliasData, err := os.ReadFile(filepath.Join(home, ".aliases", "alias.bash"))
 	if err != nil {
@@ -110,7 +110,7 @@ func TestApplyValidatesShellBeforeLinking(t *testing.T) {
 		t.Fatalf("apply error = %v, want unsupported shell", err)
 	}
 	if _, err := os.Lstat(filepath.Join(home, ".example")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("dotfile was linked before validation, Lstat error = %v", err)
+		t.Errorf("managed home content was linked before validation, Lstat error = %v", err)
 	}
 }
 
@@ -142,7 +142,7 @@ func TestApplyRefusesUnownedAliasOutputBeforeLinking(t *testing.T) {
 		t.Fatalf("apply error = %v, want alias ownership error", err)
 	}
 	if _, err := os.Lstat(filepath.Join(home, ".example")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("dotfile was linked before alias preflight: %v", err)
+		t.Errorf("managed home content was linked before alias preflight: %v", err)
 	}
 	data, err := os.ReadFile(aliasPath)
 	if err != nil || string(data) != "alias precious='keep-me'\n" {
