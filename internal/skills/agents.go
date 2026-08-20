@@ -149,7 +149,14 @@ func findCompanionAgents(sourceRoot, installedSkill, name string) (string, error
 			return nil
 		}
 		agents := nearestAgentsDirectory(filepath.Dir(path), sourceRoot)
-		if agents != "" {
+		if agents == "" {
+			return nil
+		}
+		referenced, err := hasReferencedAgent(installed, agents)
+		if err != nil {
+			return err
+		}
+		if referenced {
 			matches = append(matches, match{skill: filepath.Dir(path), agents: agents})
 		}
 		return nil
@@ -175,28 +182,16 @@ func findCompanionAgents(sourceRoot, installedSkill, name string) (string, error
 	return "", fmt.Errorf("skill %q matches more than one source directory with companion agents", name)
 }
 
-func nearestAgentsDirectory(skillDirectory, sourceRoot string) string {
-	for directory := skillDirectory; ; directory = filepath.Dir(directory) {
-		candidate := filepath.Join(directory, "agents")
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			return candidate
-		}
-		if directory == sourceRoot {
-			return ""
-		}
-		parent := filepath.Dir(directory)
-		if parent == directory || !pathutil.Contains(sourceRoot, parent) {
-			return ""
-		}
-	}
+func hasReferencedAgent(skill []byte, sourceRoot string) (bool, error) {
+	found := false
+	err := walkAgentFiles(sourceRoot, func(relative string, contents []byte, _ fs.FileMode) (bool, error) {
+		found = referencesAgent(skill, contents, relative)
+		return found, nil
+	})
+	return found, err
 }
 
-func copyCompanionAgents(candidate *stagedSkill, sourceRoot string) error {
-	skill, err := os.ReadFile(filepath.Join(candidate.canonical, "SKILL.md"))
-	if err != nil {
-		return fmt.Errorf("read installed skill while selecting companion agents: %w", err)
-	}
-	destinationRoot := filepath.Join(candidate.canonical, managedAgentsDirectory)
+func walkAgentFiles(sourceRoot string, visit func(string, []byte, fs.FileMode) (bool, error)) error {
 	return filepath.WalkDir(sourceRoot, func(source string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -225,29 +220,63 @@ func copyCompanionAgents(candidate *stagedSkill, sourceRoot string) error {
 		if err != nil {
 			return err
 		}
-		if !referencesAgent(skill, contents, relative) {
-			return nil
-		}
-		destination := filepath.Join(destinationRoot, relative)
-		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(destination, contents, info.Mode().Perm()); err != nil {
-			return fmt.Errorf("write companion agent %s: %w", destination, err)
-		}
-		link := filepath.Join(candidate.root, "home", ".claude", "agents", relative)
-		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
-			return err
-		}
-		linkDestination, err := filepath.Rel(filepath.Dir(link), destination)
+		stop, err := visit(relative, contents, info.Mode().Perm())
 		if err != nil {
 			return err
 		}
+		if stop {
+			return fs.SkipAll
+		}
+		return nil
+	})
+}
+
+func nearestAgentsDirectory(skillDirectory, sourceRoot string) string {
+	for directory := skillDirectory; ; directory = filepath.Dir(directory) {
+		candidate := filepath.Join(directory, "agents")
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+		if directory == sourceRoot {
+			return ""
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory || !pathutil.Contains(sourceRoot, parent) {
+			return ""
+		}
+	}
+}
+
+func copyCompanionAgents(candidate *stagedSkill, sourceRoot string) error {
+	skill, err := os.ReadFile(filepath.Join(candidate.canonical, "SKILL.md"))
+	if err != nil {
+		return fmt.Errorf("read installed skill while selecting companion agents: %w", err)
+	}
+	destinationRoot := filepath.Join(candidate.canonical, managedAgentsDirectory)
+	return walkAgentFiles(sourceRoot, func(relative string, contents []byte, mode fs.FileMode) (bool, error) {
+		if !referencesAgent(skill, contents, relative) {
+			return false, nil
+		}
+		destination := filepath.Join(destinationRoot, relative)
+		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+			return false, err
+		}
+		if err := os.WriteFile(destination, contents, mode); err != nil {
+			return false, fmt.Errorf("write companion agent %s: %w", destination, err)
+		}
+		link := filepath.Join(candidate.root, "home", ".claude", "agents", relative)
+		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+			return false, err
+		}
+		linkDestination, err := filepath.Rel(filepath.Dir(link), destination)
+		if err != nil {
+			return false, err
+		}
 		if err := os.Symlink(linkDestination, link); err != nil {
-			return err
+			return false, err
 		}
 		candidate.agents[relative] = link
-		return nil
+		return false, nil
 	})
 }
 
@@ -343,7 +372,7 @@ func (manager Manager) validateNewAgentPaths(candidate stagedSkill, previous []s
 			continue
 		}
 		if _, err := os.Lstat(path); err == nil {
-			return fmt.Errorf("Claude agent path %s already exists but is not owned by this skill", path)
+			return fmt.Errorf("claude agent path %s already exists but is not owned by this skill", path)
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("inspect Claude agent path %s: %w", path, err)
 		}
