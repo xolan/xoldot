@@ -114,9 +114,18 @@ Skill commands require Node.js 22.20 or newer and `npx`. xoldot stores skills
 under `files/home/.agents/skills`. Apply links them into `~/.agents/skills` and
 `~/.claude/skills`. Run `xoldot apply` after changing skills.
 
-xoldot refuses to update or remove a skill with local changes. Relative paths
-are saved as absolute paths. Git URLs cannot contain embedded credentials or
-query parameters, so use a Git credential helper for authentication.
+If the selected skill belongs to a plugin with an `agents` directory, xoldot
+also installs the Markdown agent definitions that the skill names from the
+nearest such directory. Apply links these companion agents into
+`~/.claude/agents`. Git-backed sources require `git` for companion-agent
+discovery. Xoldot does not convert Markdown agent definitions into Codex TOML
+agent configurations.
+
+xoldot refuses to update or remove a skill or companion agent with local
+changes. It also refuses to overwrite an agent owned by another skill or by the
+user. Relative paths are saved as absolute paths. Git URLs cannot contain
+embedded credentials or query parameters, so use a Git credential helper for
+authentication.
 
 ## Aliases
 

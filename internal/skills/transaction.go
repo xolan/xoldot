@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 type stagedSkill struct {
 	root          string
 	canonical     string
 	compatibility string
+	agents        map[string]string
 	digest        string
 }
 
@@ -23,13 +25,27 @@ func (manager Manager) stageSkill(name, source string) (stagedSkill, error) {
 		root:          root,
 		canonical:     filepath.Join(root, "home", ".agents", "skills", name),
 		compatibility: filepath.Join(root, "home", ".claude", "skills", name),
+		agents:        make(map[string]string),
 	}
 	managedHome := filepath.Join(root, "home")
 	if err := os.MkdirAll(managedHome, 0o755); err != nil {
 		candidate.cleanup()
 		return stagedSkill{}, fmt.Errorf("create staged managed home: %w", err)
 	}
-	if err := manager.runAdd(name, source, managedHome); err != nil {
+	sourceRoot, err := manager.agentSourceRoot(candidate.root, name, source)
+	if err != nil {
+		candidate.cleanup()
+		return stagedSkill{}, err
+	}
+	installSource := source
+	if sourceRoot != "" {
+		installSource = sourceRoot
+	}
+	if err := manager.runAdd(name, installSource, managedHome); err != nil {
+		candidate.cleanup()
+		return stagedSkill{}, err
+	}
+	if err := manager.stageAgents(&candidate, name, sourceRoot); err != nil {
 		candidate.cleanup()
 		return stagedSkill{}, err
 	}
@@ -49,57 +65,55 @@ func (candidate stagedSkill) cleanup() {
 	_ = os.RemoveAll(candidate.root)
 }
 
-type skillTransaction struct {
-	canonical          string
-	compatibility      string
-	backupDirectory    string
-	hadCanonical       bool
-	hadCompatibility   bool
-	installedCanonical bool
-	installedMirror    bool
+type transactionPath struct {
+	live      string
+	candidate string
+	backup    string
+	hadLive   bool
+	installed bool
 }
 
-func beginSkillTransaction(canonical, compatibility, managedHome string, allowExisting bool) (*skillTransaction, error) {
+type skillTransaction struct {
+	backupDirectory string
+	paths           []transactionPath
+}
+
+func beginSkillTransaction(paths []transactionPath, managedHome string, allowExisting bool) (*skillTransaction, error) {
 	directory, err := os.MkdirTemp(filepath.Dir(managedHome), ".xoldot-skill-backup-*")
 	if err != nil {
 		return nil, fmt.Errorf("create skill backup directory: %w", err)
 	}
-	transaction := &skillTransaction{
-		canonical:       canonical,
-		compatibility:   compatibility,
-		backupDirectory: directory,
-	}
-	if !allowExisting {
-		for _, path := range []string{canonical, compatibility} {
-			if _, err := os.Lstat(path); err == nil {
-				_ = os.RemoveAll(directory)
-				return nil, fmt.Errorf("managed skill path %s appeared while installing; refusing to overwrite it", path)
-			} else if !errors.Is(err, os.ErrNotExist) {
-				_ = os.RemoveAll(directory)
-				return nil, fmt.Errorf("inspect managed skill path %s: %w", path, err)
-			}
+	transaction := &skillTransaction{backupDirectory: directory, paths: paths}
+	for index := range transaction.paths {
+		path := &transaction.paths[index]
+		path.backup = filepath.Join(directory, fmt.Sprintf("path-%d", index))
+		if _, err := os.Lstat(path.live); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			_ = transaction.rollback()
+			return nil, fmt.Errorf("inspect managed skill path %s: %w", path.live, err)
 		}
-	}
-	transaction.hadCanonical, err = transaction.stage(canonical, "canonical")
-	if err != nil {
-		_ = transaction.rollback()
-		return nil, err
-	}
-	transaction.hadCompatibility, err = transaction.stage(compatibility, "compatibility")
-	if err != nil {
-		_ = transaction.rollback()
-		return nil, err
+		if !allowExisting {
+			_ = transaction.rollback()
+			return nil, fmt.Errorf("managed skill path %s appeared while installing; refusing to overwrite it", path.live)
+		}
+		if err := os.Rename(path.live, path.backup); err != nil {
+			_ = transaction.rollback()
+			return nil, fmt.Errorf("stage managed skill path %s: %w", path.live, err)
+		}
+		path.hadLive = true
 	}
 	return transaction, nil
 }
 
-func replaceSkill(candidate stagedSkill, canonical, compatibility, managedHome string, allowExisting bool, save func() error) error {
+func replaceSkill(candidate stagedSkill, canonical, compatibility, managedHome string, previousAgents []string, allowExisting bool, save func() error) error {
 	defer candidate.cleanup()
-	transaction, err := beginSkillTransaction(canonical, compatibility, managedHome, allowExisting)
+	paths := replacementPaths(candidate, canonical, compatibility, managedHome, previousAgents)
+	transaction, err := beginSkillTransaction(paths, managedHome, allowExisting)
 	if err != nil {
 		return err
 	}
-	if err := transaction.install(candidate); err != nil {
+	if err := transaction.install(); err != nil {
 		return errors.Join(err, transaction.rollback())
 	}
 	if err := save(); err != nil {
@@ -108,8 +122,12 @@ func replaceSkill(candidate stagedSkill, canonical, compatibility, managedHome s
 	return transaction.commit()
 }
 
-func removeSkill(canonical, compatibility, managedHome string, save func() error) error {
-	transaction, err := beginSkillTransaction(canonical, compatibility, managedHome, true)
+func removeSkill(canonical, compatibility, managedHome string, agents []string, save func() error) error {
+	paths := []transactionPath{{live: canonical}, {live: compatibility}}
+	for _, relative := range agents {
+		paths = append(paths, transactionPath{live: managedAgentPath(managedHome, relative)})
+	}
+	transaction, err := beginSkillTransaction(paths, managedHome, true)
 	if err != nil {
 		return err
 	}
@@ -119,56 +137,62 @@ func removeSkill(canonical, compatibility, managedHome string, save func() error
 	return transaction.commit()
 }
 
-func (transaction *skillTransaction) stage(path, name string) (bool, error) {
-	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	} else if err != nil {
-		return false, fmt.Errorf("inspect managed skill path %s: %w", path, err)
+func replacementPaths(candidate stagedSkill, canonical, compatibility, managedHome string, previousAgents []string) []transactionPath {
+	paths := []transactionPath{
+		{live: canonical, candidate: candidate.canonical},
+		{live: compatibility, candidate: candidate.compatibility},
 	}
-	if err := os.Rename(path, filepath.Join(transaction.backupDirectory, name)); err != nil {
-		return false, fmt.Errorf("stage managed skill path %s: %w", path, err)
+	agents := make(map[string]struct{}, len(previousAgents)+len(candidate.agents))
+	for _, relative := range previousAgents {
+		agents[relative] = struct{}{}
 	}
-	return true, nil
+	for relative := range candidate.agents {
+		agents[relative] = struct{}{}
+	}
+	relatives := make([]string, 0, len(agents))
+	for relative := range agents {
+		relatives = append(relatives, relative)
+	}
+	sort.Strings(relatives)
+	for _, relative := range relatives {
+		paths = append(paths, transactionPath{
+			live:      managedAgentPath(managedHome, relative),
+			candidate: candidate.agents[relative],
+		})
+	}
+	return paths
 }
 
-func (transaction *skillTransaction) install(candidate stagedSkill) error {
-	if err := os.MkdirAll(filepath.Dir(transaction.canonical), 0o755); err != nil {
-		return err
+func (transaction *skillTransaction) install() error {
+	for index := range transaction.paths {
+		path := &transaction.paths[index]
+		if path.candidate == "" {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(path.live), 0o755); err != nil {
+			return err
+		}
+		if err := os.Rename(path.candidate, path.live); err != nil {
+			return fmt.Errorf("install managed skill path %s: %w", path.live, err)
+		}
+		path.installed = true
 	}
-	if err := os.Rename(candidate.canonical, transaction.canonical); err != nil {
-		return fmt.Errorf("install canonical skill: %w", err)
-	}
-	transaction.installedCanonical = true
-	if err := os.MkdirAll(filepath.Dir(transaction.compatibility), 0o755); err != nil {
-		return err
-	}
-	if err := os.Rename(candidate.compatibility, transaction.compatibility); err != nil {
-		return fmt.Errorf("install Claude compatibility links: %w", err)
-	}
-	transaction.installedMirror = true
 	return nil
 }
 
 func (transaction *skillTransaction) rollback() error {
 	var rollbackErrors []error
-	if transaction.installedMirror {
-		if err := os.RemoveAll(transaction.compatibility); err != nil {
-			rollbackErrors = append(rollbackErrors, err)
+	for index := len(transaction.paths) - 1; index >= 0; index-- {
+		path := transaction.paths[index]
+		if path.installed {
+			if err := os.RemoveAll(path.live); err != nil {
+				rollbackErrors = append(rollbackErrors, err)
+			}
 		}
-	}
-	if transaction.installedCanonical {
-		if err := os.RemoveAll(transaction.canonical); err != nil {
-			rollbackErrors = append(rollbackErrors, err)
-		}
-	}
-	if transaction.hadCanonical {
-		if err := restorePath(filepath.Join(transaction.backupDirectory, "canonical"), transaction.canonical); err != nil {
-			rollbackErrors = append(rollbackErrors, err)
-		}
-	}
-	if transaction.hadCompatibility {
-		if err := restorePath(filepath.Join(transaction.backupDirectory, "compatibility"), transaction.compatibility); err != nil {
-			rollbackErrors = append(rollbackErrors, err)
+		if path.hadLive {
+			if err := restorePath(path.backup, path.live); err != nil {
+				rollbackErrors = append(rollbackErrors, err)
+			}
 		}
 	}
 	if err := os.RemoveAll(transaction.backupDirectory); err != nil {

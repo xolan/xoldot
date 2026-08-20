@@ -53,15 +53,16 @@ func (ExecRunner) Run(request Command) error {
 }
 
 type Manager struct {
-	CatalogPath     string
-	ManagedHome     string
-	SourceDirectory string
-	Stdin           io.Reader
-	Stdout          io.Writer
-	Stderr          io.Writer
-	Verbose         bool
-	Runner          Runner
-	Reporter        reportstatus.Reporter
+	CatalogPath       string
+	ManagedHome       string
+	SourceDirectory   string
+	Stdin             io.Reader
+	Stdout            io.Writer
+	Stderr            io.Writer
+	Verbose           bool
+	Runner            Runner
+	RepositoryFetcher RepositoryFetcher
+	Reporter          reportstatus.Reporter
 }
 
 func (manager Manager) Add(name, source string) error {
@@ -100,8 +101,12 @@ func (manager Manager) Add(name, source string) error {
 	if err != nil {
 		return err
 	}
+	if err := manager.validateNewAgentPaths(candidate, nil); err != nil {
+		candidate.cleanup()
+		return err
+	}
 	catalog.Skills = append(catalog.Skills, Skill{Name: name, Source: source, Digest: candidate.digest})
-	if err := replaceSkill(candidate, canonical, compatibility, manager.ManagedHome, false, func() error {
+	if err := replaceSkill(candidate, canonical, compatibility, manager.ManagedHome, nil, false, func() error {
 		return Save(manager.CatalogPath, catalog)
 	}); err != nil {
 		return err
@@ -127,12 +132,13 @@ func (manager Manager) Remove(name string) error {
 	if err := validateManagedPaths(manager.ManagedHome, canonical, compatibility); err != nil {
 		return err
 	}
-	if err := verifyOwnedSkill(skill, canonical, compatibility); err != nil {
+	agents, err := verifyOwnedSkill(skill, canonical, compatibility, manager.ManagedHome)
+	if err != nil {
 		return err
 	}
 
 	catalog.Skills = append(catalog.Skills[:index], catalog.Skills[index+1:]...)
-	if err := removeSkill(canonical, compatibility, manager.ManagedHome, func() error {
+	if err := removeSkill(canonical, compatibility, manager.ManagedHome, agents, func() error {
 		return Save(manager.CatalogPath, catalog)
 	}); err != nil {
 		return err
@@ -172,7 +178,8 @@ func (manager Manager) Update(name string) error {
 		if err := validateManagedPaths(manager.ManagedHome, canonical, compatibility); err != nil {
 			return err
 		}
-		if err := verifyOwnedSkill(skill, canonical, compatibility); err != nil {
+		agents, err := verifyOwnedSkill(skill, canonical, compatibility, manager.ManagedHome)
+		if err != nil {
 			return err
 		}
 
@@ -180,12 +187,16 @@ func (manager Manager) Update(name string) error {
 		if err != nil {
 			return err
 		}
-		if err := verifyOwnedSkill(skill, canonical, compatibility); err != nil {
+		if err := manager.validateNewAgentPaths(candidate, agents); err != nil {
+			candidate.cleanup()
+			return err
+		}
+		if _, err := verifyOwnedSkill(skill, canonical, compatibility, manager.ManagedHome); err != nil {
 			candidate.cleanup()
 			return err
 		}
 		catalog.Skills[index].Digest = candidate.digest
-		if err := replaceSkill(candidate, canonical, compatibility, manager.ManagedHome, true, func() error {
+		if err := replaceSkill(candidate, canonical, compatibility, manager.ManagedHome, agents, true, func() error {
 			return Save(manager.CatalogPath, catalog)
 		}); err != nil {
 			return err
@@ -336,15 +347,18 @@ func environmentValue(environment []string, key string) (string, bool) {
 	return "", false
 }
 
-func verifyOwnedSkill(skill Skill, canonical, compatibility string) error {
+func verifyOwnedSkill(skill Skill, canonical, compatibility, managedHome string) ([]string, error) {
 	digest, err := digestSkill(canonical)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if digest != skill.Digest {
-		return fmt.Errorf("skill %q has local changes; refusing to overwrite content xoldot cannot verify", skill.Name)
+		return nil, fmt.Errorf("skill %q has local changes; refusing to overwrite content xoldot cannot verify", skill.Name)
 	}
-	return validateCompatibilityMirror(canonical, compatibility)
+	if err := validateCompatibilityMirror(canonical, compatibility); err != nil {
+		return nil, err
+	}
+	return ownedAgents(canonical, managedHome)
 }
 
 func digestSkill(root string) (string, error) {

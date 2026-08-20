@@ -13,9 +13,41 @@ import (
 )
 
 type fakeRunner struct {
-	commands []Command
-	versions []map[string]string
-	failAt   int
+	commands      []Command
+	versions      []map[string]string
+	agentVersions []map[string]string
+	fetches       int
+	failAt        int
+}
+
+func (runner *fakeRunner) Fetch(request RepositoryRequest) error {
+	index := runner.fetches
+	runner.fetches++
+	if index >= len(runner.versions) {
+		return nil
+	}
+	skill := filepath.Join(request.Destination, "plugin", "skills", request.Name, "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skill), 0o755); err != nil {
+		return err
+	}
+	if contents, exists := runner.versions[index]["SKILL.md"]; exists {
+		if err := os.WriteFile(skill, []byte(contents), 0o644); err != nil {
+			return err
+		}
+	}
+	if index >= len(runner.agentVersions) {
+		return nil
+	}
+	for relative, contents := range runner.agentVersions[index] {
+		path := filepath.Join(request.Destination, "plugin", "agents", filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type noopRunner struct{}
@@ -65,12 +97,14 @@ func TestManagerAddInstallsGlobalSkillAndClaudeFileMirror(t *testing.T) {
 		t.Fatalf("commands = %d, want 1", len(runner.commands))
 	}
 	command := runner.commands[0]
-	wantArguments := []string{
-		"--yes", npmPackage, "add", "https://github.com/poteto/plugins",
+	wantArguments := []string{"--yes", npmPackage, "add"}
+	if !slices.Equal(command.Arguments[:3], wantArguments) || !slices.Equal(command.Arguments[4:], []string{
 		"--skill", "unslop", "--global", "--agent", "codex", "--yes",
+	}) {
+		t.Errorf("arguments = %q, want staged source with the standard add options", command.Arguments)
 	}
-	if !slices.Equal(command.Arguments, wantArguments) {
-		t.Errorf("arguments = %q, want %q", command.Arguments, wantArguments)
+	if got := filepath.Base(command.Arguments[3]); got != "source" {
+		t.Errorf("source directory = %q, want staged source", command.Arguments[3])
 	}
 	home, _ := environmentValue(command.Environment, "HOME")
 	if home == manager.ManagedHome || filepath.Dir(filepath.Dir(home)) != filepath.Dir(manager.ManagedHome) {
@@ -105,6 +139,130 @@ func TestManagerAddInstallsGlobalSkillAndClaudeFileMirror(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "skills.toml")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestManagerAddInstallsCompanionAgents(t *testing.T) {
+	manager, runner, _ := testManager(t, []map[string]string{{
+		"SKILL.md": "---\nname: thermos\ndescription: test\n---\nUse reviewer and quality.",
+	}})
+	runner.agentVersions = []map[string]string{{
+		"reviewer.md":       "---\nname: reviewer\n---\nreview",
+		"nested/quality.md": "---\nname: quality\n---\nquality",
+	}}
+
+	if err := manager.Add("thermos", "https://github.com/poteto/plugins"); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	for relative, want := range runner.agentVersions[0] {
+		canonical := filepath.Join(manager.ManagedHome, ".agents", "skills", "thermos", managedAgentsDirectory, filepath.FromSlash(relative))
+		contents, err := os.ReadFile(canonical)
+		if err != nil || string(contents) != want {
+			t.Errorf("agent %s = %q, %v", relative, contents, err)
+		}
+		link := managedAgentPath(manager.ManagedHome, filepath.FromSlash(relative))
+		destination, err := os.Readlink(link)
+		if err != nil {
+			t.Fatalf("Readlink(%s) error = %v", link, err)
+		}
+		expected, err := filepath.Rel(filepath.Dir(link), canonical)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if destination != expected {
+			t.Errorf("agent destination = %q, want %q", destination, expected)
+		}
+	}
+}
+
+func TestManagerAddIgnoresUnreferencedPluginAgents(t *testing.T) {
+	manager, runner, _ := testManager(t, []map[string]string{{"SKILL.md": "Use reviewer."}})
+	runner.agentVersions = []map[string]string{{
+		"reviewer.md":  "reviewer",
+		"unrelated.md": "unrelated",
+	}}
+
+	if err := manager.Add("thermos", "https://github.com/poteto/plugins"); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	if _, err := os.Stat(managedAgentPath(manager.ManagedHome, "reviewer.md")); err != nil {
+		t.Errorf("referenced agent missing: %v", err)
+	}
+	if _, err := os.Lstat(managedAgentPath(manager.ManagedHome, "unrelated.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("unreferenced agent installed: %v", err)
+	}
+}
+
+func TestManagerUpdateReplacesCompanionAgents(t *testing.T) {
+	manager, runner, _ := testManager(t, []map[string]string{
+		{"SKILL.md": "Use old-reviewer."},
+		{"SKILL.md": "Use new-reviewer."},
+	})
+	runner.agentVersions = []map[string]string{
+		{"old-reviewer.md": "old agent"},
+		{"new-reviewer.md": "new agent"},
+	}
+	if err := manager.Add("thermos", "https://github.com/poteto/plugins"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.Update("thermos"); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	old := managedAgentPath(manager.ManagedHome, "old-reviewer.md")
+	if _, err := os.Lstat(old); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("old agent remains: %v", err)
+	}
+	updated := managedAgentPath(manager.ManagedHome, "new-reviewer.md")
+	contents, err := os.ReadFile(updated)
+	if err != nil || string(contents) != "new agent" {
+		t.Errorf("updated agent = %q, %v", contents, err)
+	}
+}
+
+func TestManagerAddRefusesUnownedCompanionAgent(t *testing.T) {
+	manager, runner, _ := testManager(t, []map[string]string{{"SKILL.md": "Use reviewer."}})
+	runner.agentVersions = []map[string]string{{"reviewer.md": "managed agent"}}
+	path := managedAgentPath(manager.ManagedHome, "reviewer.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("user agent"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := manager.Add("thermos", "https://github.com/poteto/plugins")
+	if err == nil || !strings.Contains(err.Error(), "not owned") {
+		t.Fatalf("Add() error = %v, want ownership error", err)
+	}
+	contents, readErr := os.ReadFile(path)
+	if readErr != nil || string(contents) != "user agent" {
+		t.Errorf("unowned agent changed: %q, %v", contents, readErr)
+	}
+}
+
+func TestManagerUpdateRefusesLocallyModifiedCompanionAgent(t *testing.T) {
+	manager, runner, _ := testManager(t, []map[string]string{
+		{"SKILL.md": "Use reviewer. Old."},
+		{"SKILL.md": "Use reviewer. New."},
+	})
+	runner.agentVersions = []map[string]string{
+		{"reviewer.md": "old agent"},
+		{"reviewer.md": "new agent"},
+	}
+	if err := manager.Add("thermos", "https://github.com/poteto/plugins"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(managedAgentPath(manager.ManagedHome, "reviewer.md"), []byte("local edit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := manager.Update("thermos")
+	if err == nil || !strings.Contains(err.Error(), "local changes") {
+		t.Fatalf("Update() error = %v, want local changes error", err)
+	}
+	if len(runner.commands) != 1 {
+		t.Errorf("npx command count = %d, want only initial add", len(runner.commands))
 	}
 }
 
@@ -376,6 +534,21 @@ func TestManagerRemoveUsesTrackedOwnership(t *testing.T) {
 	}
 }
 
+func TestManagerRemoveDeletesCompanionAgents(t *testing.T) {
+	manager, runner, _ := testManager(t, []map[string]string{{"SKILL.md": "Use reviewer."}})
+	runner.agentVersions = []map[string]string{{"reviewer.md": "managed agent"}}
+	if err := manager.Add("thermos", "https://github.com/poteto/plugins"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.Remove("thermos"); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	if _, err := os.Lstat(managedAgentPath(manager.ManagedHome, "reviewer.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("removed companion agent remains: %v", err)
+	}
+}
+
 func TestManagerAddResolvesRelativeSourceFromCallerDirectory(t *testing.T) {
 	manager, runner, root := testManager(t, []map[string]string{{"SKILL.md": "managed"}})
 	manager.SourceDirectory = filepath.Join(root, "project")
@@ -405,11 +578,12 @@ func testManager(t *testing.T, versions []map[string]string) (Manager, *fakeRunn
 	runner := &fakeRunner{versions: versions}
 	var output bytes.Buffer
 	return Manager{
-		CatalogPath: filepath.Join(root, "skills.toml"),
-		ManagedHome: managedHome,
-		Stdout:      &output,
-		Stderr:      &output,
-		Runner:      runner,
+		CatalogPath:       filepath.Join(root, "skills.toml"),
+		ManagedHome:       managedHome,
+		Stdout:            &output,
+		Stderr:            &output,
+		Runner:            runner,
+		RepositoryFetcher: runner,
 	}, runner, root
 }
 

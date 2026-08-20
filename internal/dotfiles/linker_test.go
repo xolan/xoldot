@@ -122,6 +122,8 @@ func TestLinkCreatesSkillDirectoryLinks(t *testing.T) {
 	home := filepath.Join(root, "home")
 	canonical := filepath.Join(managed, ".agents", "skills", "example", "SKILL.md")
 	compatibility := filepath.Join(managed, ".claude", "skills", "example", "SKILL.md")
+	agent := filepath.Join(managed, ".agents", "skills", "example", ".xoldot-agents", "reviewer.md")
+	agentLink := filepath.Join(managed, ".claude", "agents", "reviewer.md")
 	if err := os.MkdirAll(filepath.Dir(canonical), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -129,6 +131,22 @@ func TestLinkCreatesSkillDirectoryLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(canonical, []byte("managed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(agent), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(agent, []byte("reviewer"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(agentLink), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agentDestination, err := filepath.Rel(filepath.Dir(agentLink), agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(agentDestination, agentLink); err != nil {
 		t.Fatal(err)
 	}
 	relative, err := filepath.Rel(filepath.Dir(compatibility), canonical)
@@ -143,8 +161,8 @@ func TestLinkCreatesSkillDirectoryLinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Link() error = %v", err)
 	}
-	if result.Created != 2 {
-		t.Fatalf("created = %d, want 2", result.Created)
+	if result.Created != 3 {
+		t.Fatalf("created = %d, want 3", result.Created)
 	}
 	homeCanonical := filepath.Join(home, ".agents", "skills", "example")
 	destination, err := os.Readlink(homeCanonical)
@@ -169,6 +187,14 @@ func TestLinkCreatesSkillDirectoryLinks(t *testing.T) {
 	if string(data) != "managed" {
 		t.Errorf("compatibility contents = %q", data)
 	}
+	homeAgent := filepath.Join(home, ".claude", "agents", "reviewer.md")
+	data, err = os.ReadFile(homeAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "reviewer" {
+		t.Errorf("agent contents = %q", data)
+	}
 
 	if err := os.RemoveAll(filepath.Join(managed, ".agents", "skills", "example")); err != nil {
 		t.Fatal(err)
@@ -176,16 +202,20 @@ func TestLinkCreatesSkillDirectoryLinks(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(managed, ".claude", "skills", "example")); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Remove(agentLink); err != nil {
+		t.Fatal(err)
+	}
 	result, err = Link(managed, home, configRoot, discardReporter, false)
 	if err != nil {
 		t.Fatalf("Link() after skill removal error = %v", err)
 	}
-	if result.Removed != 2 {
-		t.Errorf("removed = %d, want 2", result.Removed)
+	if result.Removed != 3 {
+		t.Errorf("removed = %d, want 3", result.Removed)
 	}
 	for _, target := range []string{
 		homeCanonical,
 		filepath.Dir(homeCompatibility),
+		homeAgent,
 	} {
 		if _, statErr := os.Lstat(target); !errors.Is(statErr, os.ErrNotExist) {
 			t.Errorf("stale skill link %s remains: %v", target, statErr)
