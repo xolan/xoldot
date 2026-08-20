@@ -66,7 +66,7 @@ func TestApplyInstallsMissingToolAndRechecks(t *testing.T) {
 	}}}
 	var output bytes.Buffer
 
-	err := Apply(catalog, Platform{OS: "linux", LinuxIDs: []string{"debian"}, Shell: "/bin/sh"}, strings.NewReader(""), &output, &output)
+	err := Apply(catalog, Platform{OS: "linux", LinuxIDs: []string{"debian"}, Shell: "/bin/sh"}, strings.NewReader(""), &output, &output, false)
 	if err != nil {
 		t.Fatalf("Apply() error = %v\n%s", err, output.String())
 	}
@@ -74,6 +74,29 @@ func TestApplyInstallsMissingToolAndRechecks(t *testing.T) {
 		t.Fatalf("install command did not create marker: %v", err)
 	}
 	if !strings.Contains(output.String(), "running install command") {
+		t.Errorf("output = %q", output.String())
+	}
+}
+
+func TestApplyDryReportsInsteadOfInstalling(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "installed")
+	catalog := Catalog{Tools: []Tool{{
+		Name:  "example",
+		Check: "test -f " + shellWord(marker),
+		Install: Install{Linux: map[string]string{
+			"default": "touch " + shellWord(marker),
+		}},
+	}}}
+	var output bytes.Buffer
+
+	err := Apply(catalog, Platform{OS: "linux", LinuxIDs: []string{"debian"}, Shell: "/bin/sh"}, strings.NewReader(""), &output, &output, true)
+	if err != nil {
+		t.Fatalf("Apply() error = %v\n%s", err, output.String())
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("dry run created the install marker")
+	}
+	if !strings.Contains(output.String(), "would run: touch") {
 		t.Errorf("output = %q", output.String())
 	}
 }

@@ -54,12 +54,16 @@ func (runner Runner) Configure(remote, branch string) error {
 	return runner.run("remote", "add", "origin", remote)
 }
 
-func (runner Runner) Sync(remote, branch string) error {
+func (runner Runner) Sync(remote, branch string, dry bool) error {
 	if strings.TrimSpace(remote) == "" || strings.TrimSpace(branch) == "" {
 		return fmt.Errorf("git remote and branch must be configured")
 	}
 	if _, err := os.Stat(runner.Dir + "/.git"); err != nil {
 		return fmt.Errorf("%s is not a git repository; run 'xoldot setup': %w", runner.Dir, err)
+	}
+
+	if dry {
+		return runner.syncDry(remote, branch)
 	}
 
 	if err := runner.run("add", "-A"); err != nil {
@@ -70,9 +74,14 @@ func (runner Runner) Sync(remote, branch string) error {
 		return err
 	}
 	if hasChanges {
+		if err := runner.logf("sync: committing local changes\n"); err != nil {
+			return err
+		}
 		if err := runner.run("commit", "-m", "xoldot sync"); err != nil {
 			return fmt.Errorf("commit local changes (is git user.name/user.email configured?): %w", err)
 		}
+	} else if err := runner.logf("sync: no local changes to commit\n"); err != nil {
+		return err
 	}
 
 	remoteBranch, err := runner.remoteBranchExists(remote, branch)
@@ -80,12 +89,49 @@ func (runner Runner) Sync(remote, branch string) error {
 		return err
 	}
 	if remoteBranch {
+		if err := runner.logf("sync: pulling %s %s with rebase\n", remote, branch); err != nil {
+			return err
+		}
 		if err := runner.run("pull", "--rebase", remote, branch); err != nil {
 			return err
 		}
 	}
+	if err := runner.logf("sync: pushing to %s/%s\n", remote, branch); err != nil {
+		return err
+	}
 	if err := runner.run("push", "-u", remote, "HEAD:"+branch); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (runner Runner) syncDry(remote, branch string) error {
+	status, err := runner.output("status", "--porcelain")
+	if err != nil {
+		return fmt.Errorf("git status: %w", err)
+	}
+	if strings.TrimSpace(status) == "" {
+		if err := runner.logf("sync: no local changes to commit\n"); err != nil {
+			return err
+		}
+	} else if err := runner.logf("sync: would commit:\n%s", status); err != nil {
+		return err
+	}
+	remoteBranch, err := runner.remoteBranchExists(remote, branch)
+	if err != nil {
+		return err
+	}
+	if remoteBranch {
+		if err := runner.logf("sync: would pull %s %s with rebase\n", remote, branch); err != nil {
+			return err
+		}
+	}
+	return runner.logf("sync: would push to %s/%s\n", remote, branch)
+}
+
+func (runner Runner) logf(format string, arguments ...any) error {
+	if _, err := fmt.Fprintf(runner.Stdout, format, arguments...); err != nil {
+		return fmt.Errorf("write sync status: %w", err)
 	}
 	return nil
 }

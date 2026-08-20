@@ -222,6 +222,10 @@ changes exist, pulls the configured branch with rebase when it already exists
 on the remote, and pushes the result. Git's normal `user.name`, `user.email`,
 and remote authentication configuration are used.
 
+`xoldot apply --dry` and `xoldot sync --dry` preview every action (tool
+installs, dotfile links and removals, commits, pulls, and pushes) without
+changing anything.
+
 ## Current scope
 
 The `profiles/` directory is reserved for profile inheritance, but profiles are

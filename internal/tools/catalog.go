@@ -126,7 +126,7 @@ func (tool Tool) InstallCommand(platform Platform) (string, error) {
 	}
 }
 
-func Apply(catalog Catalog, platform Platform, stdin io.Reader, stdout, stderr io.Writer) error {
+func Apply(catalog Catalog, platform Platform, stdin io.Reader, stdout, stderr io.Writer, dry bool) error {
 	shell := platform.Shell
 	if shell == "" {
 		shell = "/bin/sh"
@@ -145,6 +145,12 @@ func Apply(catalog Catalog, platform Platform, stdin io.Reader, stdout, stderr i
 		install, err := tool.InstallCommand(platform)
 		if err != nil {
 			return err
+		}
+		if dry {
+			if _, err := fmt.Fprintf(stdout, "tool %s: would run: %s\n", tool.Name, install); err != nil {
+				return fmt.Errorf("write tool status: %w", err)
+			}
+			continue
 		}
 		if _, err := fmt.Fprintf(stdout, "tool %s: running install command\n", tool.Name); err != nil {
 			return fmt.Errorf("write tool status: %w", err)

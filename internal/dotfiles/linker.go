@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -29,7 +30,7 @@ type linkRecord struct {
 	Destination string `json:"destination"`
 }
 
-func Link(managedRoot, home, configRoot string) (Result, error) {
+func Link(managedRoot, home, configRoot string, logOutput io.Writer, dry bool) (Result, error) {
 	managedRoot, err := filepath.Abs(managedRoot)
 	if err != nil {
 		return Result{}, fmt.Errorf("resolve managed home: %w", err)
@@ -43,6 +44,8 @@ func Link(managedRoot, home, configRoot string) (Result, error) {
 		return Result{}, fmt.Errorf("resolve config root: %w", err)
 	}
 
+	// ponytail: these MkdirAll calls run even in dry mode; creating empty
+	// roots is setup the walk below needs, not the mutation being previewed.
 	if err := os.MkdirAll(managedRoot, 0o755); err != nil {
 		return Result{}, fmt.Errorf("create managed home: %w", err)
 	}
@@ -153,11 +156,21 @@ func Link(managedRoot, home, configRoot string) (Result, error) {
 
 	result := Result{Current: current}
 	for _, plan := range plans {
+		if dry {
+			if err := logf(logOutput, "dotfiles: would link %s -> %s\n", plan.Target, plan.Destination); err != nil {
+				return result, err
+			}
+			result.Created++
+			continue
+		}
 		if err := os.MkdirAll(filepath.Dir(plan.Target), 0o755); err != nil {
 			return result, fmt.Errorf("create target directory for %s: %w", plan.Target, err)
 		}
 		if err := os.Symlink(plan.Destination, plan.Target); err != nil {
 			return result, fmt.Errorf("link %s to %s: %w", plan.Target, plan.Destination, err)
+		}
+		if err := logf(logOutput, "dotfiles: linked %s -> %s\n", plan.Target, plan.Destination); err != nil {
+			return result, err
 		}
 		result.Created++
 	}
@@ -169,17 +182,34 @@ func Link(managedRoot, home, configRoot string) (Result, error) {
 		if !owned {
 			continue
 		}
+		if dry {
+			if err := logf(logOutput, "dotfiles: would remove stale link %s\n", record.Target); err != nil {
+				return result, err
+			}
+			result.Removed++
+			continue
+		}
 		if err := os.Remove(record.Target); err != nil {
 			return result, fmt.Errorf("remove stale managed link %s: %w", record.Target, err)
 		}
+		if err := logf(logOutput, "dotfiles: removed stale link %s\n", record.Target); err != nil {
+			return result, err
+		}
 		result.Removed++
 	}
-	if !slices.Equal(previous.Links, records) {
+	if !dry && !slices.Equal(previous.Links, records) {
 		if err := saveLedger(ledgerPath, records); err != nil {
 			return result, err
 		}
 	}
 	return result, nil
+}
+
+func logf(output io.Writer, format string, arguments ...any) error {
+	if _, err := fmt.Fprintf(output, format, arguments...); err != nil {
+		return fmt.Errorf("write link status: %w", err)
+	}
+	return nil
 }
 
 type linkStatus uint8

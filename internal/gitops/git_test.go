@@ -30,7 +30,7 @@ func TestSyncPushesInitialCommit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "xoldot.toml"), []byte("test = true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := runner.Sync("origin", "main"); err != nil {
+	if err := runner.Sync("origin", "main", false); err != nil {
 		t.Fatalf("Sync() error = %v\n%s", err, output.String())
 	}
 
@@ -97,4 +97,36 @@ func runGit(t *testing.T, directory string, arguments ...string) string {
 		t.Fatalf("git %v: %v\n%s", arguments, err, output)
 	}
 	return string(output)
+}
+
+func TestSyncDryLeavesRepositoryUntouched(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", "--initial-branch=main", remote)
+
+	var output bytes.Buffer
+	runner := Runner{Dir: root, Stdout: &output, Stderr: &output}
+	if err := runner.Configure(remote, "main"); err != nil {
+		t.Fatalf("Configure() error = %v\n%s", err, output.String())
+	}
+	if err := os.WriteFile(filepath.Join(root, "xoldot.toml"), []byte("test = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Sync("origin", "main", true); err != nil {
+		t.Fatalf("Sync() error = %v\n%s", err, output.String())
+	}
+	for _, want := range []string{"would commit", "would push to origin/main"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("output missing %q:\n%s", want, output.String())
+		}
+	}
+	if got := runGit(t, root, "status", "--porcelain"); !strings.Contains(got, "xoldot.toml") {
+		t.Errorf("dry run staged or committed the change: %q", got)
+	}
+	if got := runGit(t, "", "--git-dir", remote, "branch", "--list"); strings.TrimSpace(got) != "" {
+		t.Errorf("dry run pushed to the remote: %q", got)
+	}
 }

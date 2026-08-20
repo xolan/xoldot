@@ -2,6 +2,7 @@ package dotfiles
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +21,7 @@ func TestLinkCreatesAndKeepsManagedLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Link(managed, home, filepath.Join(root, "config"))
+	result, err := Link(managed, home, filepath.Join(root, "config"), io.Discard, false)
 	if err != nil {
 		t.Fatalf("Link() error = %v", err)
 	}
@@ -48,7 +49,7 @@ func TestLinkCreatesAndKeepsManagedLinks(t *testing.T) {
 		}
 	}
 
-	result, err = Link(managed, home, filepath.Join(root, "config"))
+	result, err = Link(managed, home, filepath.Join(root, "config"), io.Discard, false)
 	if err != nil {
 		t.Fatalf("second Link() error = %v", err)
 	}
@@ -81,7 +82,7 @@ func TestLinkPreservesManagedRelativeFileSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Link(managed, home, configRoot)
+	result, err := Link(managed, home, configRoot, io.Discard, false)
 	if err != nil {
 		t.Fatalf("Link() error = %v", err)
 	}
@@ -114,7 +115,7 @@ func TestLinkPreservesManagedRelativeFileSymlink(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(managed, ".claude", "skills", "example")); err != nil {
 		t.Fatal(err)
 	}
-	result, err = Link(managed, home, configRoot)
+	result, err = Link(managed, home, configRoot, io.Discard, false)
 	if err != nil {
 		t.Fatalf("Link() after skill removal error = %v", err)
 	}
@@ -169,7 +170,7 @@ func TestLinkMapsRelativeFileSymlinkThroughResolvedParents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, configRoot); err != nil {
+	if _, err := Link(managed, home, configRoot, io.Discard, false); err != nil {
 		t.Fatalf("Link() error = %v", err)
 	}
 	compatibilityTarget := filepath.Join(actualClaude, "skills", "example", "SKILL.md")
@@ -213,7 +214,7 @@ func TestLinkRefusesOrdinaryFileConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, filepath.Join(root, "config")); err == nil {
+	if _, err := Link(managed, home, filepath.Join(root, "config"), io.Discard, false); err == nil {
 		t.Fatal("Link() error = nil, want conflict")
 	}
 	data, err := os.ReadFile(filepath.Join(home, ".vimrc"))
@@ -245,7 +246,7 @@ func TestLinkPlansAllTargetsBeforeMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, filepath.Join(root, "config")); err == nil {
+	if _, err := Link(managed, home, filepath.Join(root, "config"), io.Discard, false); err == nil {
 		t.Fatal("Link() error = nil, want conflict")
 	}
 	if _, err := os.Lstat(filepath.Join(home, ".a-managed")); !errors.Is(err, os.ErrNotExist) {
@@ -268,7 +269,7 @@ func TestLinkRemovesOnlyStaleLinksItStillOwns(t *testing.T) {
 	if err := os.WriteFile(source, []byte("managed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Link(managed, home, configRoot); err != nil {
+	if _, err := Link(managed, home, configRoot, io.Discard, false); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(home, ".owned")
@@ -276,7 +277,7 @@ func TestLinkRemovesOnlyStaleLinksItStillOwns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Link(managed, home, configRoot)
+	result, err := Link(managed, home, configRoot, io.Discard, false)
 	if err != nil {
 		t.Fatalf("Link() error = %v", err)
 	}
@@ -290,7 +291,7 @@ func TestLinkRemovesOnlyStaleLinksItStillOwns(t *testing.T) {
 	if err := os.WriteFile(source, []byte("managed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Link(managed, home, configRoot); err != nil {
+	if _, err := Link(managed, home, configRoot, io.Discard, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(target); err != nil {
@@ -307,7 +308,7 @@ func TestLinkRemovesOnlyStaleLinksItStillOwns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err = Link(managed, home, configRoot)
+	result, err = Link(managed, home, configRoot, io.Discard, false)
 	if err != nil {
 		t.Fatalf("Link() error = %v", err)
 	}
@@ -347,7 +348,7 @@ func TestLinkRejectsLedgerTargetsOutsideHome(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, configRoot); err == nil || !strings.Contains(err.Error(), "outside the target home") {
+	if _, err := Link(managed, home, configRoot, io.Discard, false); err == nil || !strings.Contains(err.Error(), "outside the target home") {
 		t.Fatalf("Link() error = %v, want invalid ledger error", err)
 	}
 	if _, err := os.Lstat(outsideTarget); err != nil {
@@ -371,7 +372,7 @@ func TestLinkReservesItsLedgerPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, configRoot); err == nil || !strings.Contains(err.Error(), "reserved") {
+	if _, err := Link(managed, home, configRoot, io.Discard, false); err == nil || !strings.Contains(err.Error(), "reserved") {
 		t.Fatalf("Link() error = %v, want reserved path error", err)
 	}
 }
@@ -389,7 +390,7 @@ func TestLinkRefusesTargetInsideConfigRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, configRoot); err == nil {
+	if _, err := Link(managed, home, configRoot, io.Discard, false); err == nil {
 		t.Fatal("Link() error = nil, want recursive target error")
 	}
 }
@@ -410,7 +411,7 @@ func TestLinkRefusesSourceDirectorySymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, configRoot); err == nil || !strings.Contains(err.Error(), "directory symlink") {
+	if _, err := Link(managed, home, configRoot, io.Discard, false); err == nil || !strings.Contains(err.Error(), "directory symlink") {
 		t.Fatalf("Link() error = %v, want directory symlink error", err)
 	}
 	if _, err := os.Lstat(filepath.Join(home, "linked-directory")); !errors.Is(err, os.ErrNotExist) {
@@ -439,7 +440,7 @@ func TestLinkResolvesConfigRootBeforeRecursionCheck(t *testing.T) {
 	}
 
 	linkedManaged := filepath.Join(configLink, "files", "home")
-	if _, err := Link(linkedManaged, home, configLink); err == nil {
+	if _, err := Link(linkedManaged, home, configLink, io.Discard, false); err == nil {
 		t.Fatal("Link() error = nil, want recursive target error through config symlink")
 	}
 }
@@ -468,7 +469,7 @@ func TestLinkRefusesMismatchedManagedSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, configRoot); err == nil {
+	if _, err := Link(managed, home, configRoot, io.Discard, false); err == nil {
 		t.Fatal("Link() error = nil, want conflict")
 	}
 	destination, err := os.Readlink(target)
@@ -477,5 +478,36 @@ func TestLinkRefusesMismatchedManagedSymlink(t *testing.T) {
 	}
 	if destination != oldSource {
 		t.Errorf("link destination = %q, want unchanged %q", destination, oldSource)
+	}
+}
+
+func TestLinkDryPlansWithoutMutating(t *testing.T) {
+	root := t.TempDir()
+	managed := filepath.Join(root, "config", "files", "home")
+	home := filepath.Join(root, "home")
+	source := filepath.Join(managed, ".vimrc")
+	if err := os.MkdirAll(managed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, []byte("managed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var output strings.Builder
+	result, err := Link(managed, home, filepath.Join(root, "config"), &output, true)
+	if err != nil {
+		t.Fatalf("Link() error = %v", err)
+	}
+	if result.Created != 1 {
+		t.Errorf("created = %d, want 1", result.Created)
+	}
+	if !strings.Contains(output.String(), "would link") {
+		t.Errorf("output = %q", output.String())
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".vimrc")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("dry run created a link: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local", "state", "xoldot", "links.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Error("dry run saved the link ledger")
 	}
 }

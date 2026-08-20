@@ -46,17 +46,30 @@ func Run(arguments []string, input io.Reader, output, errorOutput io.Writer, ver
 	case "skill", "skills":
 		return skill(paths, arguments[1:], input, output, errorOutput)
 	case "apply":
-		if len(arguments) != 1 {
-			return fmt.Errorf("usage: xoldot apply")
+		dry, err := parseDry("apply", arguments[1:])
+		if err != nil {
+			return err
 		}
-		return apply(paths, input, output, errorOutput)
+		return apply(paths, input, output, errorOutput, dry)
 	case "sync":
-		if len(arguments) != 1 {
-			return fmt.Errorf("usage: xoldot sync")
+		dry, err := parseDry("sync", arguments[1:])
+		if err != nil {
+			return err
 		}
-		return sync(paths, input, output, errorOutput)
+		return sync(paths, input, output, errorOutput, dry)
 	default:
 		return fmt.Errorf("unknown command %q; run 'xoldot help'", arguments[0])
+	}
+}
+
+func parseDry(command string, arguments []string) (bool, error) {
+	switch {
+	case len(arguments) == 0:
+		return false, nil
+	case len(arguments) == 1 && arguments[0] == "--dry":
+		return true, nil
+	default:
+		return false, fmt.Errorf("usage: xoldot %s [--dry]", command)
 	}
 }
 
@@ -275,7 +288,7 @@ func skill(paths config.Paths, arguments []string, input io.Reader, output, erro
 	}
 }
 
-func apply(paths config.Paths, input io.Reader, output, errorOutput io.Writer) error {
+func apply(paths config.Paths, input io.Reader, output, errorOutput io.Writer, dry bool) error {
 	cfg, err := config.Load(paths.Config)
 	if err != nil {
 		return err
@@ -309,15 +322,22 @@ func apply(paths config.Paths, input io.Reader, output, errorOutput io.Writer) e
 	}
 	aliasPath := filepath.Join(aliasDir, "alias."+shell)
 
-	if err := toolcatalog.Apply(catalog, toolcatalog.CurrentPlatform(), input, output, errorOutput); err != nil {
+	if err := toolcatalog.Apply(catalog, toolcatalog.CurrentPlatform(), input, output, errorOutput, dry); err != nil {
 		return err
 	}
-	linked, err := dotfiles.Link(paths.ManagedHome, home, paths.Root)
+	linked, err := dotfiles.Link(paths.ManagedHome, home, paths.Root, output, dry)
 	if err != nil {
 		return err
 	}
-	if err := writef(output, "dotfiles: %d linked, %d removed, %d already current\n", linked.Created, linked.Removed, linked.Current); err != nil {
+	summary := "dotfiles: %d linked, %d removed, %d already current\n"
+	if dry {
+		summary = "dotfiles: would link %d, would remove %d, %d already current\n"
+	}
+	if err := writef(output, summary, linked.Created, linked.Removed, linked.Current); err != nil {
 		return err
+	}
+	if dry {
+		return writef(output, "aliases: would render %s\n", aliasPath)
 	}
 	if err := aliases.Render(aliasPath, shell, file.Aliases); err != nil {
 		return err
@@ -325,7 +345,7 @@ func apply(paths config.Paths, input io.Reader, output, errorOutput io.Writer) e
 	return writef(output, "aliases: rendered %s\n", aliasPath)
 }
 
-func sync(paths config.Paths, input io.Reader, output, errorOutput io.Writer) error {
+func sync(paths config.Paths, input io.Reader, output, errorOutput io.Writer, dry bool) error {
 	cfg, err := config.Load(paths.Config)
 	if err != nil {
 		return err
@@ -335,8 +355,11 @@ func sync(paths config.Paths, input io.Reader, output, errorOutput io.Writer) er
 		return fmt.Errorf("git is disabled; run 'xoldot setup' with a remote URL")
 	}
 	runner := gitops.Runner{Stdin: input, Dir: paths.Root, Stdout: output, Stderr: errorOutput}
-	if err := runner.Sync(git.Remote, git.Branch); err != nil {
+	if err := runner.Sync(git.Remote, git.Branch, dry); err != nil {
 		return err
+	}
+	if dry {
+		return write(output, "Dry run complete; nothing was changed\n")
 	}
 	return write(output, "Sync complete\n")
 }
@@ -366,7 +389,7 @@ Usage:
   xoldot [--config-dir DIR] skill add <skill> --from <source>
   xoldot [--config-dir DIR] skill remove <skill>
   xoldot [--config-dir DIR] skill update [skill]
-  xoldot [--config-dir DIR] apply
-  xoldot [--config-dir DIR] sync
+  xoldot [--config-dir DIR] apply [--dry]
+  xoldot [--config-dir DIR] sync [--dry]
   xoldot version
 `
