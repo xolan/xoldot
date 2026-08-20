@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +16,7 @@ func TestInitializeCreatesDefaultLayout(t *testing.T) {
 		t.Fatalf("Initialize() error = %v", err)
 	}
 
-	for _, path := range []string{paths.Config, paths.Tools, paths.Aliases, paths.Skills, paths.Bootstrap} {
+	for _, path := range []string{paths.Config, paths.Tools, paths.Aliases, paths.Skills} {
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("expected %s: %v", path, err)
 		}
@@ -25,6 +26,9 @@ func TestInitializeCreatesDefaultLayout(t *testing.T) {
 		if err != nil || !info.IsDir() {
 			t.Errorf("expected directory %s: %v", path, err)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(paths.Root, "bootstrap.sh")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("bootstrap.sh should not be generated: %v", err)
 	}
 
 	cfg, err := Load(paths.Config)

@@ -21,6 +21,8 @@ import (
 	toolcatalog "github.com/xolan/xoldot/internal/tools"
 )
 
+const setupApplyInstruction = "Run 'xoldot apply' to configure this machine"
+
 type app struct {
 	input       io.Reader
 	output      io.Writer
@@ -279,9 +281,13 @@ func (a *app) setup() error {
 			return err
 		}
 		if git.Enabled {
-			return a.reportf(status.Success, "Git remains enabled")
+			if err := a.reportf(status.Success, "Git remains enabled"); err != nil {
+				return err
+			}
+		} else if err := a.reportf(status.Warning, "Git remains disabled; run setup again when a remote is ready"); err != nil {
+			return err
 		}
-		return a.reportf(status.Warning, "Git remains disabled; run setup again when a remote is ready")
+		return a.reportf(status.Progress, setupApplyInstruction)
 	}
 
 	branch, err := prompt(reader, a.output, a.style.bold(fmt.Sprintf("Git branch [%s]: ", git.Branch)))
@@ -332,7 +338,10 @@ func (a *app) setup() error {
 	if err := config.Save(paths.Config, cfg); err != nil {
 		return err
 	}
-	return a.reportf(status.Success, "Git enabled with origin on branch %s", branch)
+	if err := a.reportf(status.Success, "Git enabled with origin on branch %s", branch); err != nil {
+		return err
+	}
+	return a.reportf(status.Progress, setupApplyInstruction)
 }
 
 func prompt(reader *bufio.Reader, output io.Writer, message string) (string, error) {

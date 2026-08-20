@@ -22,16 +22,15 @@ Setup creates this layout without overwriting files that already exist:
 ├── files/
 │   ├── aliases.toml
 │   └── home/
-├── tools.toml
-└── bootstrap.sh
+└── tools.toml
 ```
 
 Git is disabled initially. Supplying a remote URL during setup initializes the
 configuration directory as a repository, adds it as `origin`, and enables
 `xoldot sync`. On a fresh machine, an existing remote branch is checked out
 before missing layout files are initialized. A blank URL leaves Git disabled.
-The generated `bootstrap.sh` runs `xoldot apply` on a machine where xoldot is
-already installed.
+After setup, run `xoldot apply` to install missing tools, link managed files,
+and render aliases for the current shell.
 
 The top-level defaults are:
 
@@ -118,13 +117,13 @@ Skill commands manage global, home-folder agent skills. The shorthand form
 assumes a GitHub repository:
 
 ```sh
-xoldot skill add unslop@poteto/noodle
+xoldot skill add unslop@poteto/plugins
 ```
 
 An explicit source is also accepted:
 
 ```sh
-xoldot skill add unslop --from https://github.com/poteto/noodle
+xoldot skill add unslop --from https://github.com/poteto/plugins
 xoldot skill update unslop       # update one skill
 xoldot skills update             # update all; "skills" is an alias
 xoldot skill remove unslop

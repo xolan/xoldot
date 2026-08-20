@@ -24,7 +24,6 @@ type Paths struct {
 	Skills      string
 	Profiles    string
 	ManagedHome string
-	Bootstrap   string
 }
 
 type Config struct {
@@ -90,7 +89,6 @@ func NewPaths(root string) Paths {
 		Skills:      filepath.Join(root, "skills.toml"),
 		Profiles:    filepath.Join(root, "profiles"),
 		ManagedHome: filepath.Join(root, "files", "home"),
-		Bootstrap:   filepath.Join(root, "bootstrap.sh"),
 	}
 }
 
@@ -115,9 +113,6 @@ func Initialize(paths Paths) error {
 		return err
 	}
 	if err := writeIfMissing(paths.Skills, []byte(defaultSkillsTOML), 0o644); err != nil {
-		return err
-	}
-	if err := writeIfMissing(paths.Bootstrap, []byte(bootstrapScript), 0o755); err != nil {
 		return err
 	}
 	return nil
@@ -273,15 +268,4 @@ const defaultAliasesTOML = `# Add entries with: xoldot alias add <name> <command
 `
 
 const defaultSkillsTOML = `# Add entries with: xoldot skill add <name>@<owner>/<repo>
-`
-
-const bootstrapScript = `#!/bin/sh
-set -eu
-
-if ! command -v xoldot >/dev/null 2>&1; then
-  echo "xoldot is not installed or not on PATH" >&2
-  exit 1
-fi
-
-exec xoldot apply
 `

@@ -22,6 +22,9 @@ func TestSetupWithoutRemoteThenAliasToolAndApply(t *testing.T) {
 	if err := Run([]string{"--config-dir", root, "setup"}, bytes.NewBufferString("\n"), &output, &output, "test"); err != nil {
 		t.Fatalf("setup error = %v", err)
 	}
+	if !strings.Contains(output.String(), "Run 'xoldot apply' to configure this machine") {
+		t.Errorf("setup output = %q", output.String())
+	}
 	if err := Run([]string{"--config-dir", root, "alias", "add", "ll", "ls -la"}, bytes.NewReader(nil), &output, &output, "test"); err != nil {
 		t.Fatalf("alias add error = %v", err)
 	}

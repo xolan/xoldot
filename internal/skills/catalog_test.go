@@ -16,21 +16,21 @@ func TestParseAddArguments(t *testing.T) {
 	}{
 		{
 			name:       "GitHub shorthand",
-			arguments:  []string{"unslop@poteto/noodle"},
+			arguments:  []string{"unslop@poteto/plugins"},
 			wantName:   "unslop",
-			wantSource: "https://github.com/poteto/noodle",
+			wantSource: "https://github.com/poteto/plugins",
 		},
 		{
 			name:       "explicit source",
-			arguments:  []string{"unslop", "--from", "https://git.example.com/poteto/noodle.git"},
+			arguments:  []string{"unslop", "--from", "https://git.example.com/poteto/plugins.git"},
 			wantName:   "unslop",
-			wantSource: "https://git.example.com/poteto/noodle.git",
+			wantSource: "https://git.example.com/poteto/plugins.git",
 		},
 		{
 			name:       "GitHub source shorthand",
-			arguments:  []string{"unslop", "--from", "poteto/noodle"},
+			arguments:  []string{"unslop", "--from", "poteto/plugins"},
 			wantName:   "unslop",
-			wantSource: "https://github.com/poteto/noodle",
+			wantSource: "https://github.com/poteto/plugins",
 		},
 	}
 
@@ -50,9 +50,9 @@ func TestParseAddArguments(t *testing.T) {
 func TestParseAddArgumentsRejectsAmbiguousOrUnsafeInput(t *testing.T) {
 	for _, arguments := range [][]string{
 		{"unslop"},
-		{"../unslop@poteto/noodle"},
-		{"unslop@poteto/noodle/extra"},
-		{"Unslop@poteto/noodle"},
+		{"../unslop@poteto/plugins"},
+		{"unslop@poteto/plugins/extra"},
+		{"Unslop@poteto/plugins"},
 	} {
 		if _, _, err := ParseAddArguments(arguments); err == nil {
 			t.Errorf("ParseAddArguments(%q) error = nil", arguments)

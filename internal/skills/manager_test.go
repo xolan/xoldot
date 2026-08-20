@@ -58,7 +58,7 @@ func TestManagerAddInstallsGlobalSkillAndClaudeFileMirror(t *testing.T) {
 		"references/help.md": "help\n",
 	}})
 
-	if err := manager.Add("unslop", "https://github.com/poteto/noodle"); err != nil {
+	if err := manager.Add("unslop", "https://github.com/poteto/plugins"); err != nil {
 		t.Fatalf("Add() error = %v", err)
 	}
 	if len(runner.commands) != 1 {
@@ -66,7 +66,7 @@ func TestManagerAddInstallsGlobalSkillAndClaudeFileMirror(t *testing.T) {
 	}
 	command := runner.commands[0]
 	wantArguments := []string{
-		"--yes", npmPackage, "add", "https://github.com/poteto/noodle",
+		"--yes", npmPackage, "add", "https://github.com/poteto/plugins",
 		"--skill", "unslop", "--global", "--agent", "codex", "--yes",
 	}
 	if !slices.Equal(command.Arguments, wantArguments) {
@@ -164,7 +164,7 @@ func TestManagerAddRefusesUnownedDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := manager.Add("unslop", "https://github.com/poteto/noodle")
+	err := manager.Add("unslop", "https://github.com/poteto/plugins")
 	if err == nil || !strings.Contains(err.Error(), "not owned") {
 		t.Fatalf("Add() error = %v, want ownership error", err)
 	}
@@ -190,7 +190,7 @@ func TestManagerAddRefusesManagedParentSymlinkOutsideHome(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := manager.Add("unslop", "https://github.com/poteto/noodle")
+	err := manager.Add("unslop", "https://github.com/poteto/plugins")
 	if err == nil || !strings.Contains(err.Error(), "outside the managed home") {
 		t.Fatalf("Add() error = %v, want managed path error", err)
 	}
@@ -209,7 +209,7 @@ func TestManagerAddRefusesManagedParentSymlinkOutsideHome(t *testing.T) {
 func TestManagerAddRollsBackInvalidInstall(t *testing.T) {
 	manager, runner, _ := testManager(t, []map[string]string{{"README.md": "invalid"}})
 
-	err := manager.Add("unslop", "https://github.com/poteto/noodle")
+	err := manager.Add("unslop", "https://github.com/poteto/plugins")
 	if err == nil || !strings.Contains(err.Error(), "SKILL.md") {
 		t.Fatalf("Add() error = %v, want invalid skill error", err)
 	}
@@ -238,7 +238,7 @@ func TestManagerUpdateReplacesOwnedSkillAndRefreshesMirror(t *testing.T) {
 		{"SKILL.md": "old", "references/old.md": "old"},
 		{"SKILL.md": "new", "references/new.md": "new"},
 	})
-	if err := manager.Add("unslop", "https://github.com/poteto/noodle"); err != nil {
+	if err := manager.Add("unslop", "https://github.com/poteto/plugins"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -264,7 +264,7 @@ func TestManagerUpdateRefusesLocallyModifiedSkill(t *testing.T) {
 		{"SKILL.md": "old"},
 		{"SKILL.md": "new"},
 	})
-	if err := manager.Add("unslop", "https://github.com/poteto/noodle"); err != nil {
+	if err := manager.Add("unslop", "https://github.com/poteto/plugins"); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(manager.ManagedHome, ".agents", "skills", "unslop", "SKILL.md")
@@ -285,7 +285,7 @@ func TestManagerUpdateRefusesClaudeDirectorySymlink(t *testing.T) {
 		{"SKILL.md": "old", "references/help.md": "help"},
 		{"SKILL.md": "new"},
 	})
-	if err := manager.Add("unslop", "https://github.com/poteto/noodle"); err != nil {
+	if err := manager.Add("unslop", "https://github.com/poteto/plugins"); err != nil {
 		t.Fatal(err)
 	}
 	canonical := filepath.Join(manager.ManagedHome, ".agents", "skills", "unslop")
@@ -312,7 +312,7 @@ func TestManagerUpdateRefusesClaudeDirectorySymlink(t *testing.T) {
 
 func TestManagerUpdateRestoresSkillWhenNpxFails(t *testing.T) {
 	manager, runner, _ := testManager(t, []map[string]string{{"SKILL.md": "old"}})
-	if err := manager.Add("unslop", "https://github.com/poteto/noodle"); err != nil {
+	if err := manager.Add("unslop", "https://github.com/poteto/plugins"); err != nil {
 		t.Fatal(err)
 	}
 	runner.failAt = 2
@@ -332,7 +332,7 @@ func TestManagerUpdateValidatesCandidateBeforeReplacingLiveSkill(t *testing.T) {
 		{"SKILL.md": "old"},
 		{"README.md": "invalid"},
 	})
-	if err := manager.Add("unslop", "https://github.com/poteto/noodle"); err != nil {
+	if err := manager.Add("unslop", "https://github.com/poteto/plugins"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -349,7 +349,7 @@ func TestManagerUpdateValidatesCandidateBeforeReplacingLiveSkill(t *testing.T) {
 
 func TestManagerRemoveUsesTrackedOwnership(t *testing.T) {
 	manager, runner, _ := testManager(t, []map[string]string{{"SKILL.md": "managed"}})
-	if err := manager.Add("unslop", "https://github.com/poteto/noodle"); err != nil {
+	if err := manager.Add("unslop", "https://github.com/poteto/plugins"); err != nil {
 		t.Fatal(err)
 	}
 
