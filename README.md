@@ -124,6 +124,7 @@ List cataloged tools, one name per line:
 
 ```sh
 xoldot tool list
+xoldot tools list # "tools" is an alias
 ```
 
 ## Agent skills
@@ -170,6 +171,7 @@ Add or update an alias with:
 
 ```sh
 xoldot alias add ll "ls -la"
+xoldot aliases add gs "git status" # "aliases" is an alias
 ```
 
 Aliases are stored as data in `files/aliases.toml`. During `xoldot apply`, the

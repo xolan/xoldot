@@ -78,7 +78,7 @@ func (a *app) rootCommand(version string) *cobra.Command {
 		},
 	})
 
-	toolCommand := &cobra.Command{Use: "tool", Short: "Manage the tool catalog"}
+	toolCommand := &cobra.Command{Use: "tool", Aliases: []string{"tools"}, Short: "Manage the tool catalog"}
 	toolCommand.AddCommand(
 		&cobra.Command{
 			Use:   "add <tool>",
@@ -107,7 +107,7 @@ func (a *app) rootCommand(version string) *cobra.Command {
 	)
 	root.AddCommand(toolCommand)
 
-	aliasCommand := &cobra.Command{Use: "alias", Short: "Manage shell aliases"}
+	aliasCommand := &cobra.Command{Use: "alias", Aliases: []string{"aliases"}, Short: "Manage shell aliases"}
 	aliasCommand.AddCommand(&cobra.Command{
 		Use:   "add <alias> <command>",
 		Short: "Add or update a shell alias",

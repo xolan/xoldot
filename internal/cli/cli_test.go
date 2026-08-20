@@ -153,6 +153,46 @@ func TestSkillsPluralAliasUpdatesEmptyCatalog(t *testing.T) {
 	}
 }
 
+func TestToolsPluralAliasListsEmptyCatalog(t *testing.T) {
+	root := t.TempDir()
+	if err := config.Initialize(config.NewPaths(root)); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := Run(
+		[]string{"--config-dir", root, "tools", "list"},
+		bytes.NewReader(nil),
+		&output,
+		&output,
+		"test",
+	); err != nil {
+		t.Fatalf("tools list error = %v", err)
+	}
+	if output.Len() != 0 {
+		t.Errorf("output = %q, want empty catalog", output.String())
+	}
+}
+
+func TestAliasesPluralAliasAddsAlias(t *testing.T) {
+	root := t.TempDir()
+	if err := config.Initialize(config.NewPaths(root)); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := Run(
+		[]string{"--config-dir", root, "aliases", "add", "ll", "ls -la"},
+		bytes.NewReader(nil),
+		&output,
+		&output,
+		"test",
+	); err != nil {
+		t.Fatalf("aliases add error = %v", err)
+	}
+	if !strings.Contains(output.String(), "Added alias ll") {
+		t.Errorf("output = %q", output.String())
+	}
+}
+
 func TestToolListPrintsCatalogNamesInAlphabeticalOrder(t *testing.T) {
 	root := t.TempDir()
 	paths := config.NewPaths(root)
