@@ -30,6 +30,12 @@ type linkRecord struct {
 	Destination string `json:"destination"`
 }
 
+type linkPlan struct {
+	linkRecord
+	ReplaceLegacySkillDirectory bool
+	LegacyLinks                 int
+}
+
 func Link(managedRoot, home, configRoot string, logOutput io.Writer, dry bool) (Result, error) {
 	managedRoot, err := filepath.Abs(managedRoot)
 	if err != nil {
@@ -66,26 +72,31 @@ func Link(managedRoot, home, configRoot string, logOutput io.Writer, dry bool) (
 	}
 
 	ledgerPath := filepath.Join(home, ".local", "state", "xoldot", "links.json")
-	var plans []linkRecord
+	previous, err := loadLedger(ledgerPath)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := validateLedger(previous, home, managedRoot); err != nil {
+		return Result{}, fmt.Errorf("validate managed link state %s: %w", ledgerPath, err)
+	}
+
+	var plans []linkPlan
 	var records []linkRecord
 	var current int
 	err = filepath.WalkDir(managedRoot, func(source string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() {
+		skillDirectory := entry.IsDir() && isSkillDirectory(managedRoot, source)
+		if entry.IsDir() && !skillDirectory {
 			return nil
 		}
-		isSymlink := entry.Type()&os.ModeSymlink != 0
-		if isSymlink {
-			destination, err := os.Stat(source)
-			if err != nil {
-				return fmt.Errorf("inspect managed symlink %s: %w", source, err)
-			}
-			if destination.IsDir() {
-				return fmt.Errorf("managed directory symlink %s is not supported; track its files individually", source)
+		if skillDirectory {
+			if err := validateSkillDirectory(source, managedRoot); err != nil {
+				return err
 			}
 		}
+		isSymlink := entry.Type()&os.ModeSymlink != 0
 
 		relative, err := filepath.Rel(managedRoot, source)
 		if err != nil {
@@ -116,33 +127,51 @@ func Link(managedRoot, home, configRoot string, logOutput io.Writer, dry bool) (
 		}
 		switch state {
 		case linkConflict:
-			return fmt.Errorf("target %s already exists and is not managed by xoldot", target)
+			if !skillDirectory {
+				return fmt.Errorf("target %s already exists and is not managed by xoldot", target)
+			}
+			legacyLinks, replace, err := legacySkillDirectory(target, previous)
+			if err != nil {
+				return err
+			}
+			if !replace {
+				return fmt.Errorf("target %s already exists and is not managed by xoldot", target)
+			}
+			plans = append(plans, linkPlan{
+				linkRecord:                  linkRecord{Target: target, Destination: destination},
+				ReplaceLegacySkillDirectory: true,
+				LegacyLinks:                 legacyLinks,
+			})
 		case linkCurrent:
 			current++
 		default:
-			plans = append(plans, linkRecord{Target: target, Destination: destination})
+			plans = append(plans, linkPlan{linkRecord: linkRecord{Target: target, Destination: destination}})
 		}
 		records = append(records, linkRecord{Target: target, Destination: destination})
+		if skillDirectory {
+			return filepath.SkipDir
+		}
 		return nil
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("plan managed home links: %w", err)
 	}
-
-	previous, err := loadLedger(ledgerPath)
-	if err != nil {
-		return Result{}, err
-	}
-	if err := validateLedger(previous, home, managedRoot); err != nil {
-		return Result{}, fmt.Errorf("validate managed link state %s: %w", ledgerPath, err)
-	}
 	currentTargets := make(map[string]struct{}, len(records))
 	for _, record := range records {
 		currentTargets[record.Target] = struct{}{}
 	}
+	var replacedSkillDirectories []string
+	for _, plan := range plans {
+		if plan.ReplaceLegacySkillDirectory {
+			replacedSkillDirectories = append(replacedSkillDirectories, plan.Target)
+		}
+	}
 	var stale []linkRecord
 	for _, record := range previous.Links {
 		if _, exists := currentTargets[record.Target]; exists {
+			continue
+		}
+		if containedByAny(replacedSkillDirectories, record.Target) {
 			continue
 		}
 		owned, err := exactSymlink(record.Target, record.Destination)
@@ -161,7 +190,15 @@ func Link(managedRoot, home, configRoot string, logOutput io.Writer, dry bool) (
 				return result, err
 			}
 			result.Created++
+			result.Removed += plan.LegacyLinks
 			continue
+		}
+		if plan.ReplaceLegacySkillDirectory {
+			removed, err := removeLegacySkillDirectory(plan.Target, previous)
+			if err != nil {
+				return result, err
+			}
+			result.Removed += removed
 		}
 		if err := os.MkdirAll(filepath.Dir(plan.Target), 0o755); err != nil {
 			return result, fmt.Errorf("create target directory for %s: %w", plan.Target, err)
@@ -203,6 +240,109 @@ func Link(managedRoot, home, configRoot string, logOutput io.Writer, dry bool) (
 		}
 	}
 	return result, nil
+}
+
+func isSkillDirectory(managedRoot, path string) bool {
+	parent := filepath.Dir(path)
+	return parent == filepath.Join(managedRoot, ".agents", "skills") ||
+		parent == filepath.Join(managedRoot, ".claude", "skills")
+}
+
+func validateSkillDirectory(root, managedRoot string) error {
+	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink == 0 {
+			return nil
+		}
+		_, err := managedFileSymlinkDestination(path, managedRoot)
+		return err
+	})
+}
+
+func containedByAny(parents []string, path string) bool {
+	for _, parent := range parents {
+		if pathutil.Contains(parent, path) {
+			return true
+		}
+	}
+	return false
+}
+
+func legacySkillDirectory(target string, previous linkLedger) (int, bool, error) {
+	info, err := os.Lstat(target)
+	if err != nil {
+		return 0, false, fmt.Errorf("inspect legacy skill directory %s: %w", target, err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return 0, false, nil
+	}
+
+	owned := make(map[string]string)
+	for _, record := range previous.Links {
+		if record.Target != target && pathutil.Contains(target, record.Target) {
+			owned[record.Target] = record.Destination
+		}
+	}
+	if len(owned) == 0 {
+		return 0, false, nil
+	}
+
+	links := 0
+	err = filepath.WalkDir(target, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		destination, exists := owned[path]
+		if !exists {
+			return fmt.Errorf("legacy skill directory %s contains unowned path %s", target, path)
+		}
+		exact, err := exactSymlink(path, destination)
+		if err != nil {
+			return err
+		}
+		if !exact {
+			return fmt.Errorf("legacy skill path %s is no longer managed by xoldot", path)
+		}
+		links++
+		return nil
+	})
+	if err != nil {
+		return 0, false, err
+	}
+	return links, true, nil
+}
+
+func removeLegacySkillDirectory(target string, previous linkLedger) (int, error) {
+	links, replace, err := legacySkillDirectory(target, previous)
+	if err != nil {
+		return 0, err
+	}
+	if !replace {
+		return 0, fmt.Errorf("legacy skill directory %s changed while applying links", target)
+	}
+
+	var paths []string
+	err = filepath.WalkDir(target, func(path string, _ fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("walk legacy skill directory %s: %w", target, err)
+	}
+	for index := len(paths) - 1; index >= 0; index-- {
+		if err := os.Remove(paths[index]); err != nil {
+			return 0, fmt.Errorf("remove legacy skill path %s: %w", paths[index], err)
+		}
+	}
+	return links, nil
 }
 
 func logf(output io.Writer, format string, arguments ...any) error {
@@ -311,23 +451,9 @@ func saveLedger(path string, records []linkRecord) error {
 }
 
 func mappedSymlinkDestination(source, target, managedRoot, home, configRoot string) (string, error) {
-	destination, err := os.Readlink(source)
+	destination, err := managedFileSymlinkDestination(source, managedRoot)
 	if err != nil {
-		return "", fmt.Errorf("read managed symlink %s: %w", source, err)
-	}
-	if !filepath.IsAbs(destination) {
-		destination = filepath.Join(filepath.Dir(source), destination)
-	}
-	destination = filepath.Clean(destination)
-	if !pathutil.Contains(managedRoot, destination) {
-		return "", fmt.Errorf("managed symlink %s points outside the managed home", source)
-	}
-	resolved, err := filepath.EvalSymlinks(destination)
-	if err != nil {
-		return "", fmt.Errorf("resolve managed symlink %s: %w", source, err)
-	}
-	if !pathutil.Contains(managedRoot, resolved) {
-		return "", fmt.Errorf("managed symlink %s resolves outside the managed home", source)
+		return "", err
 	}
 	relative, err := filepath.Rel(managedRoot, destination)
 	if err != nil {
@@ -351,4 +477,33 @@ func mappedSymlinkDestination(source, target, managedRoot, home, configRoot stri
 		return "", fmt.Errorf("make target symlink for %s: %w", target, err)
 	}
 	return linkDestination, nil
+}
+
+func managedFileSymlinkDestination(source, managedRoot string) (string, error) {
+	info, err := os.Stat(source)
+	if err != nil {
+		return "", fmt.Errorf("inspect managed symlink %s: %w", source, err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("managed directory symlink %s is not supported; track its files individually", source)
+	}
+	destination, err := os.Readlink(source)
+	if err != nil {
+		return "", fmt.Errorf("read managed symlink %s: %w", source, err)
+	}
+	if !filepath.IsAbs(destination) {
+		destination = filepath.Join(filepath.Dir(source), destination)
+	}
+	destination = filepath.Clean(destination)
+	if !pathutil.Contains(managedRoot, destination) {
+		return "", fmt.Errorf("managed symlink %s points outside the managed home", source)
+	}
+	resolved, err := filepath.EvalSymlinks(destination)
+	if err != nil {
+		return "", fmt.Errorf("resolve managed symlink %s: %w", source, err)
+	}
+	if !pathutil.Contains(managedRoot, resolved) {
+		return "", fmt.Errorf("managed symlink %s resolves outside the managed home", source)
+	}
+	return destination, nil
 }
