@@ -35,8 +35,8 @@ Apply the configuration to the current machine:
 xoldot apply
 ```
 
-This installs missing tools, links managed files, and renders aliases for the
-current shell.
+This installs missing tools, links managed home content, and renders aliases
+for the current shell.
 
 The default configuration is:
 

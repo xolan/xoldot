@@ -14,8 +14,8 @@ import (
 
 	"github.com/xolan/xoldot/internal/aliases"
 	"github.com/xolan/xoldot/internal/config"
-	"github.com/xolan/xoldot/internal/dotfiles"
 	"github.com/xolan/xoldot/internal/gitops"
+	"github.com/xolan/xoldot/internal/managedhome"
 	agentskills "github.com/xolan/xoldot/internal/skills"
 	"github.com/xolan/xoldot/internal/status"
 	toolcatalog "github.com/xolan/xoldot/internal/tools"
@@ -52,7 +52,7 @@ func Run(arguments []string, input io.Reader, output, errorOutput io.Writer, ver
 func (a *app) rootCommand(version string) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "xoldot",
-		Short:         "Manage tools, aliases, agent skills, and home dotfile links",
+		Short:         "Manage tools, aliases, skills, and managed home content",
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -68,7 +68,7 @@ func (a *app) rootCommand(version string) *cobra.Command {
   xoldot apply --dry
   xoldot sync --dry`,
 	}
-	root.PersistentFlags().StringVar(&a.configDir, "config-dir", "", "configuration directory (defaults to the xoldot config home)")
+	root.PersistentFlags().StringVar(&a.configDir, "config-dir", "", "configuration directory (uses the xoldot default when omitted)")
 	root.PersistentFlags().BoolVarP(&a.verbose, "verbose", "v", false, "log underlying git and npx commands")
 
 	root.AddCommand(&cobra.Command{
@@ -196,7 +196,7 @@ func (a *app) rootCommand(version string) *cobra.Command {
 	var applyDry bool
 	applyCommand := &cobra.Command{
 		Use:   "apply",
-		Short: "Install tools, link dotfiles, and render aliases",
+		Short: "Install tools, link managed home content, and render aliases",
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			return a.apply(applyDry)
@@ -514,7 +514,7 @@ func (a *app) apply(dry bool) error {
 	if err != nil {
 		return err
 	}
-	dotfilePlan, err := dotfiles.Prepare(paths.ManagedHome, home, paths.Root)
+	managedHomePlan, err := managedhome.Prepare(paths.ManagedHome, home, paths.Root)
 	if err != nil {
 		return err
 	}
@@ -522,14 +522,14 @@ func (a *app) apply(dry bool) error {
 	if err := toolcatalog.Apply(catalog, toolcatalog.CurrentPlatform(), a.input, a.output, a.errorOutput, a.reporter, dry); err != nil {
 		return err
 	}
-	linked, err := dotfilePlan.Apply(a.reporter, dry)
+	linked, err := managedHomePlan.Apply(a.reporter, dry)
 	if err != nil {
 		return err
 	}
 	if dry {
 		if err := a.reportf(
 			status.Progress,
-			"Dotfile links: would create %d, remove %d, leave %d current",
+			"Managed home links: would create %d, remove %d, leave %d current",
 			linked.Created,
 			linked.Removed,
 			linked.Current,
@@ -540,7 +540,7 @@ func (a *app) apply(dry bool) error {
 	}
 	if err := a.reportf(
 		status.Success,
-		"Dotfile links: %d created, %d removed, %d already current",
+		"Managed home links: %d created, %d removed, %d already current",
 		linked.Created,
 		linked.Removed,
 		linked.Current,
