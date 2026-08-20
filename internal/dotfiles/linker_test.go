@@ -8,7 +8,18 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/xolan/xoldot/internal/status"
 )
+
+var discardReporter = writerReporter(io.Discard)
+
+func writerReporter(output io.Writer) status.Reporter {
+	return status.ReporterFunc(func(_ status.Kind, text string) error {
+		_, err := fmt.Fprintln(output, text)
+		return err
+	})
+}
 
 func TestLinkCreatesAndKeepsManagedLinks(t *testing.T) {
 	root := t.TempDir()
@@ -22,7 +33,7 @@ func TestLinkCreatesAndKeepsManagedLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Link(managed, home, filepath.Join(root, "config"), io.Discard, false)
+	result, err := Link(managed, home, filepath.Join(root, "config"), discardReporter, false)
 	if err != nil {
 		t.Fatalf("Link() error = %v", err)
 	}
@@ -50,7 +61,7 @@ func TestLinkCreatesAndKeepsManagedLinks(t *testing.T) {
 		}
 	}
 
-	result, err = Link(managed, home, filepath.Join(root, "config"), io.Discard, false)
+	result, err = Link(managed, home, filepath.Join(root, "config"), discardReporter, false)
 	if err != nil {
 		t.Fatalf("second Link() error = %v", err)
 	}
@@ -77,7 +88,7 @@ func TestLinkStillMapsOrdinaryManagedFilesIndividually(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Link(managed, home, configRoot, io.Discard, false)
+	result, err := Link(managed, home, configRoot, discardReporter, false)
 	if err != nil {
 		t.Fatalf("Link() error = %v", err)
 	}
@@ -128,7 +139,7 @@ func TestLinkCreatesSkillDirectoryLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Link(managed, home, configRoot, io.Discard, false)
+	result, err := Link(managed, home, configRoot, discardReporter, false)
 	if err != nil {
 		t.Fatalf("Link() error = %v", err)
 	}
@@ -165,7 +176,7 @@ func TestLinkCreatesSkillDirectoryLinks(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(managed, ".claude", "skills", "example")); err != nil {
 		t.Fatal(err)
 	}
-	result, err = Link(managed, home, configRoot, io.Discard, false)
+	result, err = Link(managed, home, configRoot, discardReporter, false)
 	if err != nil {
 		t.Fatalf("Link() after skill removal error = %v", err)
 	}
@@ -220,7 +231,7 @@ func TestLinkCreatesSkillDirectoryLinksThroughResolvedParents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, configRoot, io.Discard, false); err != nil {
+	if _, err := Link(managed, home, configRoot, discardReporter, false); err != nil {
 		t.Fatalf("Link() error = %v", err)
 	}
 	canonicalTarget := filepath.Join(actualAgents, "skills", "example")
@@ -300,7 +311,7 @@ func TestLinkMigratesLegacyPerFileSkillLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Link(managed, home, configRoot, io.Discard, true)
+	result, err := Link(managed, home, configRoot, discardReporter, true)
 	if err != nil {
 		t.Fatalf("dry Link() error = %v", err)
 	}
@@ -315,7 +326,7 @@ func TestLinkMigratesLegacyPerFileSkillLinks(t *testing.T) {
 		t.Fatalf("dry run changed canonical directory mode to %v", info.Mode())
 	}
 
-	result, err = Link(managed, home, configRoot, io.Discard, false)
+	result, err = Link(managed, home, configRoot, discardReporter, false)
 	if err != nil {
 		t.Fatalf("Link() error = %v", err)
 	}
@@ -366,7 +377,7 @@ func TestLinkRefusesToMigrateSkillDirectoryWithUnownedContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, configRoot, io.Discard, false); err == nil || !strings.Contains(err.Error(), "unowned path") {
+	if _, err := Link(managed, home, configRoot, discardReporter, false); err == nil || !strings.Contains(err.Error(), "unowned path") {
 		t.Fatalf("Link() error = %v, want unowned path error", err)
 	}
 	data, err := os.ReadFile(unowned)
@@ -398,7 +409,7 @@ func TestLinkRefusesOrdinaryFileConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, filepath.Join(root, "config"), io.Discard, false); err == nil {
+	if _, err := Link(managed, home, filepath.Join(root, "config"), discardReporter, false); err == nil {
 		t.Fatal("Link() error = nil, want conflict")
 	}
 	data, err := os.ReadFile(filepath.Join(home, ".vimrc"))
@@ -430,7 +441,7 @@ func TestLinkPlansAllTargetsBeforeMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, filepath.Join(root, "config"), io.Discard, false); err == nil {
+	if _, err := Link(managed, home, filepath.Join(root, "config"), discardReporter, false); err == nil {
 		t.Fatal("Link() error = nil, want conflict")
 	}
 	if _, err := os.Lstat(filepath.Join(home, ".a-managed")); !errors.Is(err, os.ErrNotExist) {
@@ -453,7 +464,7 @@ func TestLinkRemovesOnlyStaleLinksItStillOwns(t *testing.T) {
 	if err := os.WriteFile(source, []byte("managed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Link(managed, home, configRoot, io.Discard, false); err != nil {
+	if _, err := Link(managed, home, configRoot, discardReporter, false); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(home, ".owned")
@@ -461,7 +472,7 @@ func TestLinkRemovesOnlyStaleLinksItStillOwns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Link(managed, home, configRoot, io.Discard, false)
+	result, err := Link(managed, home, configRoot, discardReporter, false)
 	if err != nil {
 		t.Fatalf("Link() error = %v", err)
 	}
@@ -475,7 +486,7 @@ func TestLinkRemovesOnlyStaleLinksItStillOwns(t *testing.T) {
 	if err := os.WriteFile(source, []byte("managed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Link(managed, home, configRoot, io.Discard, false); err != nil {
+	if _, err := Link(managed, home, configRoot, discardReporter, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(target); err != nil {
@@ -492,7 +503,7 @@ func TestLinkRemovesOnlyStaleLinksItStillOwns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err = Link(managed, home, configRoot, io.Discard, false)
+	result, err = Link(managed, home, configRoot, discardReporter, false)
 	if err != nil {
 		t.Fatalf("Link() error = %v", err)
 	}
@@ -532,7 +543,7 @@ func TestLinkRejectsLedgerTargetsOutsideHome(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, configRoot, io.Discard, false); err == nil || !strings.Contains(err.Error(), "outside the target home") {
+	if _, err := Link(managed, home, configRoot, discardReporter, false); err == nil || !strings.Contains(err.Error(), "outside the target home") {
 		t.Fatalf("Link() error = %v, want invalid ledger error", err)
 	}
 	if _, err := os.Lstat(outsideTarget); err != nil {
@@ -556,7 +567,7 @@ func TestLinkReservesItsLedgerPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, configRoot, io.Discard, false); err == nil || !strings.Contains(err.Error(), "reserved") {
+	if _, err := Link(managed, home, configRoot, discardReporter, false); err == nil || !strings.Contains(err.Error(), "reserved") {
 		t.Fatalf("Link() error = %v, want reserved path error", err)
 	}
 }
@@ -574,7 +585,7 @@ func TestLinkRefusesTargetInsideConfigRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, configRoot, io.Discard, false); err == nil {
+	if _, err := Link(managed, home, configRoot, discardReporter, false); err == nil {
 		t.Fatal("Link() error = nil, want recursive target error")
 	}
 }
@@ -595,7 +606,7 @@ func TestLinkRefusesSourceDirectorySymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, configRoot, io.Discard, false); err == nil || !strings.Contains(err.Error(), "directory symlink") {
+	if _, err := Link(managed, home, configRoot, discardReporter, false); err == nil || !strings.Contains(err.Error(), "directory symlink") {
 		t.Fatalf("Link() error = %v, want directory symlink error", err)
 	}
 	if _, err := os.Lstat(filepath.Join(home, "linked-directory")); !errors.Is(err, os.ErrNotExist) {
@@ -624,7 +635,7 @@ func TestLinkResolvesConfigRootBeforeRecursionCheck(t *testing.T) {
 	}
 
 	linkedManaged := filepath.Join(configLink, "files", "home")
-	if _, err := Link(linkedManaged, home, configLink, io.Discard, false); err == nil {
+	if _, err := Link(linkedManaged, home, configLink, discardReporter, false); err == nil {
 		t.Fatal("Link() error = nil, want recursive target error through config symlink")
 	}
 }
@@ -653,7 +664,7 @@ func TestLinkRefusesMismatchedManagedSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, configRoot, io.Discard, false); err == nil {
+	if _, err := Link(managed, home, configRoot, discardReporter, false); err == nil {
 		t.Fatal("Link() error = nil, want conflict")
 	}
 	destination, err := os.Readlink(target)
@@ -678,14 +689,14 @@ func TestLinkDryPlansWithoutMutating(t *testing.T) {
 	}
 
 	var output strings.Builder
-	result, err := Link(managed, home, filepath.Join(root, "config"), &output, true)
+	result, err := Link(managed, home, filepath.Join(root, "config"), writerReporter(&output), true)
 	if err != nil {
 		t.Fatalf("Link() error = %v", err)
 	}
 	if result.Created != 1 {
 		t.Errorf("created = %d, want 1", result.Created)
 	}
-	if !strings.Contains(output.String(), "would link") {
+	if !strings.Contains(output.String(), "Would link") {
 		t.Errorf("output = %q", output.String())
 	}
 	if _, err := os.Lstat(filepath.Join(home, ".vimrc")); !errors.Is(err, os.ErrNotExist) {
@@ -728,7 +739,7 @@ func TestLinkRollsBackMutationsWhenExecutionFails(t *testing.T) {
 		}
 	}
 
-	if _, err := Link(managed, home, configRoot, &failAfterWriter{}, false); err == nil {
+	if _, err := Link(managed, home, configRoot, writerReporter(&failAfterWriter{}), false); err == nil {
 		t.Fatal("Link() error = nil, want output failure")
 	}
 	for _, name := range []string{"one", "two"} {
@@ -759,7 +770,7 @@ func TestLinkRestoresStaleLinksWhenExecutionFails(t *testing.T) {
 	if err := os.WriteFile(oldSource, []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Link(managed, home, configRoot, io.Discard, false); err != nil {
+	if _, err := Link(managed, home, configRoot, discardReporter, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(oldSource); err != nil {
@@ -770,7 +781,7 @@ func TestLinkRestoresStaleLinksWhenExecutionFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, configRoot, &failAfterWriter{}, false); err == nil {
+	if _, err := Link(managed, home, configRoot, writerReporter(&failAfterWriter{}), false); err == nil {
 		t.Fatal("Link() error = nil, want output failure")
 	}
 	oldTarget := filepath.Join(home, "old")
@@ -799,7 +810,7 @@ func TestLinkDryDoesNotCreateMissingHome(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, configRoot, io.Discard, true); err != nil {
+	if _, err := Link(managed, home, configRoot, discardReporter, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(home); !errors.Is(err, os.ErrNotExist) {
@@ -837,7 +848,7 @@ func TestPlanRefusesChangedCurrentLinkBeforeMutating(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := plan.Apply(io.Discard, false); err == nil || !strings.Contains(err.Error(), "changed while applying") {
+	if _, err := plan.Apply(discardReporter, false); err == nil || !strings.Contains(err.Error(), "changed while applying") {
 		t.Fatalf("Apply() error = %v, want changed-current error", err)
 	}
 	if _, err := os.Lstat(filepath.Join(home, "missing")); !errors.Is(err, os.ErrNotExist) {

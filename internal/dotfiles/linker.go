@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/xolan/xoldot/internal/config"
 	"github.com/xolan/xoldot/internal/pathutil"
+	reportstatus "github.com/xolan/xoldot/internal/status"
 )
 
 type Result struct {
@@ -45,12 +45,12 @@ type Plan struct {
 	current    []linkRecord
 }
 
-func Link(managedRoot, home, configRoot string, logOutput io.Writer, dry bool) (Result, error) {
+func Link(managedRoot, home, configRoot string, reporter reportstatus.Reporter, dry bool) (Result, error) {
 	plan, err := Prepare(managedRoot, home, configRoot)
 	if err != nil {
 		return Result{}, err
 	}
-	return plan.Apply(logOutput, dry)
+	return plan.Apply(reporter, dry)
 }
 
 func Prepare(managedRoot, home, configRoot string) (Plan, error) {
@@ -211,18 +211,18 @@ func walkManagedRoot(root string, walk fs.WalkDirFunc) error {
 	return filepath.WalkDir(root, walk)
 }
 
-func (plan Plan) Apply(logOutput io.Writer, dry bool) (Result, error) {
+func (plan Plan) Apply(reporter reportstatus.Reporter, dry bool) (Result, error) {
 	result := Result{Current: len(plan.current)}
 	if dry {
 		for _, link := range plan.links {
-			if err := logf(logOutput, "dotfiles: would link %s -> %s\n", link.Target, link.Destination); err != nil {
+			if err := reportf(reporter, "Would link %s -> %s", link.Target, link.Destination); err != nil {
 				return result, err
 			}
 			result.Created++
 			result.Removed += link.LegacyLinks
 		}
 		for _, record := range plan.stale {
-			if err := logf(logOutput, "dotfiles: would remove stale link %s\n", record.Target); err != nil {
+			if err := reportf(reporter, "Would remove stale link %s", record.Target); err != nil {
 				return result, err
 			}
 			result.Removed++
@@ -259,7 +259,7 @@ func (plan Plan) Apply(logOutput io.Writer, dry bool) (Result, error) {
 			return fail(fmt.Errorf("link %s to %s: %w", link.Target, link.Destination, err))
 		}
 		transaction.created = append(transaction.created, link.Target)
-		if err := logf(logOutput, "dotfiles: linked %s -> %s\n", link.Target, link.Destination); err != nil {
+		if err := reportf(reporter, "Linked %s -> %s", link.Target, link.Destination); err != nil {
 			return fail(err)
 		}
 		result.Created++
@@ -276,7 +276,7 @@ func (plan Plan) Apply(logOutput io.Writer, dry bool) (Result, error) {
 			return fail(fmt.Errorf("remove stale managed link %s: %w", record.Target, err))
 		}
 		transaction.removed = append(transaction.removed, record)
-		if err := logf(logOutput, "dotfiles: removed stale link %s\n", record.Target); err != nil {
+		if err := reportf(reporter, "Removed stale link %s", record.Target); err != nil {
 			return fail(err)
 		}
 		result.Removed++
@@ -470,8 +470,8 @@ func (transaction linkTransaction) commit() error {
 	return errors.Join(cleanupErrors...)
 }
 
-func logf(output io.Writer, format string, arguments ...any) error {
-	if _, err := fmt.Fprintf(output, format, arguments...); err != nil {
+func reportf(reporter reportstatus.Reporter, format string, arguments ...any) error {
+	if err := reportstatus.Reportf(reporter, reportstatus.Progress, format, arguments...); err != nil {
 		return fmt.Errorf("write link status: %w", err)
 	}
 	return nil

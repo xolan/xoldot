@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/xolan/xoldot/internal/pathutil"
+	reportstatus "github.com/xolan/xoldot/internal/status"
 	"github.com/xolan/xoldot/internal/urlutil"
 )
 
@@ -60,6 +61,7 @@ type Manager struct {
 	Stderr          io.Writer
 	Verbose         bool
 	Runner          Runner
+	Reporter        reportstatus.Reporter
 }
 
 func (manager Manager) Add(name, source string) error {
@@ -104,7 +106,7 @@ func (manager Manager) Add(name, source string) error {
 	}); err != nil {
 		return err
 	}
-	return writeStatus(manager.Stdout, "Added skill %s from %s\n", name, source)
+	return manager.reportf(reportstatus.Success, "Added skill %s from %s", name, source)
 }
 
 func (manager Manager) Remove(name string) error {
@@ -135,7 +137,7 @@ func (manager Manager) Remove(name string) error {
 	}); err != nil {
 		return err
 	}
-	return writeStatus(manager.Stdout, "Removed skill %s\n", name)
+	return manager.reportf(reportstatus.Success, "Removed skill %s", name)
 }
 
 func (manager Manager) Update(name string) error {
@@ -188,12 +190,12 @@ func (manager Manager) Update(name string) error {
 		}); err != nil {
 			return err
 		}
-		if err := writeStatus(manager.Stdout, "Updated skill %s\n", skill.Name); err != nil {
+		if err := manager.reportf(reportstatus.Success, "Updated skill %s", skill.Name); err != nil {
 			return err
 		}
 	}
 	if len(indices) == 0 {
-		return writeStatus(manager.Stdout, "No skills to update\n")
+		return manager.reportf(reportstatus.Success, "No skills to update")
 	}
 	return nil
 }
@@ -214,8 +216,8 @@ func (manager Manager) run(managedHome string, arguments ...string) error {
 	if runner == nil {
 		runner = ExecRunner{}
 	}
-	if manager.Verbose && manager.Stderr != nil {
-		if _, err := fmt.Fprintf(manager.Stderr, "+ npx %s\n", formatCommand(arguments)); err != nil {
+	if manager.Verbose {
+		if err := manager.reportf(reportstatus.Command, "npx %s", formatCommand(arguments)); err != nil {
 			return fmt.Errorf("write skill command: %w", err)
 		}
 	}
@@ -502,11 +504,8 @@ func buildCompatibilityMirror(canonical, compatibility string) error {
 	return nil
 }
 
-func writeStatus(output io.Writer, format string, arguments ...any) error {
-	if output == nil {
-		return nil
-	}
-	if _, err := fmt.Fprintf(output, format, arguments...); err != nil {
+func (manager Manager) reportf(kind reportstatus.Kind, format string, arguments ...any) error {
+	if err := reportstatus.Reportf(manager.Reporter, kind, format, arguments...); err != nil {
 		return fmt.Errorf("write skill status: %w", err)
 	}
 	return nil

@@ -16,6 +16,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/xolan/xoldot/internal/config"
+	reportstatus "github.com/xolan/xoldot/internal/status"
 )
 
 type Catalog struct {
@@ -151,7 +152,14 @@ func (tool Tool) InstallCommand(platform Platform) (string, error) {
 	}
 }
 
-func Apply(catalog Catalog, platform Platform, stdin io.Reader, stdout, stderr io.Writer, dry bool) error {
+func Apply(
+	catalog Catalog,
+	platform Platform,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
+	reporter reportstatus.Reporter,
+	dry bool,
+) error {
 	if err := Validate(catalog); err != nil {
 		return err
 	}
@@ -160,7 +168,7 @@ func Apply(catalog Catalog, platform Platform, stdin io.Reader, stdout, stderr i
 		shell = "/bin/sh"
 	}
 	if dry {
-		return preview(catalog, platform, stdout)
+		return preview(catalog, platform, reporter)
 	}
 
 	type installPlan struct {
@@ -170,8 +178,8 @@ func Apply(catalog Catalog, platform Platform, stdin io.Reader, stdout, stderr i
 	var missing []Tool
 	for _, tool := range catalog.Tools {
 		if commandPasses(shell, tool.Check) {
-			if _, err := fmt.Fprintf(stdout, "tool %s: already installed\n", tool.Name); err != nil {
-				return fmt.Errorf("write tool status: %w", err)
+			if err := reportf(reporter, "Tool %s is already installed", tool.Name); err != nil {
+				return err
 			}
 			continue
 		}
@@ -186,8 +194,8 @@ func Apply(catalog Catalog, platform Platform, stdin io.Reader, stdout, stderr i
 		plans = append(plans, installPlan{tool: tool, command: command})
 	}
 	for _, plan := range plans {
-		if _, err := fmt.Fprintf(stdout, "tool %s: running install command\n", plan.tool.Name); err != nil {
-			return fmt.Errorf("write tool status: %w", err)
+		if err := reportf(reporter, "Installing tool %s", plan.tool.Name); err != nil {
+			return err
 		}
 		command := exec.Command(shell, "-c", plan.command)
 		command.Stdin = stdin
@@ -203,21 +211,28 @@ func Apply(catalog Catalog, platform Platform, stdin io.Reader, stdout, stderr i
 	return nil
 }
 
-func preview(catalog Catalog, platform Platform, stdout io.Writer) error {
+func preview(catalog Catalog, platform Platform, reporter reportstatus.Reporter) error {
 	for _, tool := range catalog.Tools {
-		if _, err := fmt.Fprintf(stdout, "tool %s: would check: %s\n", tool.Name, tool.Check); err != nil {
-			return fmt.Errorf("write tool status: %w", err)
+		if err := reportf(reporter, "Would check tool %s: %s", tool.Name, tool.Check); err != nil {
+			return err
 		}
 		install, err := tool.InstallCommand(platform)
 		if err != nil {
-			if _, writeErr := fmt.Fprintf(stdout, "tool %s: if missing, %v\n", tool.Name, err); writeErr != nil {
-				return fmt.Errorf("write tool status: %w", writeErr)
+			if writeErr := reportf(reporter, "If tool %s is missing: %v", tool.Name, err); writeErr != nil {
+				return writeErr
 			}
 			continue
 		}
-		if _, err := fmt.Fprintf(stdout, "tool %s: if missing, would run: %s\n", tool.Name, install); err != nil {
-			return fmt.Errorf("write tool status: %w", err)
+		if err := reportf(reporter, "If tool %s is missing, would run: %s", tool.Name, install); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+func reportf(reporter reportstatus.Reporter, format string, arguments ...any) error {
+	if err := reportstatus.Reportf(reporter, reportstatus.Progress, format, arguments...); err != nil {
+		return fmt.Errorf("write tool status: %w", err)
 	}
 	return nil
 }

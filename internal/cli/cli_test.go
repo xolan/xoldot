@@ -184,8 +184,8 @@ func TestSkillsPluralAliasUpdatesEmptyCatalog(t *testing.T) {
 	); err != nil {
 		t.Fatalf("skills update error = %v", err)
 	}
-	if !strings.Contains(output.String(), "No skills to update") {
-		t.Errorf("output = %q", output.String())
+	if got, want := output.String(), "✓ No skills to update\n"; got != want {
+		t.Errorf("output = %q, want %q", got, want)
 	}
 }
 
@@ -224,8 +224,8 @@ func TestAliasesPluralAliasAddsAlias(t *testing.T) {
 	); err != nil {
 		t.Fatalf("aliases add error = %v", err)
 	}
-	if !strings.Contains(output.String(), "Added alias ll") {
-		t.Errorf("output = %q", output.String())
+	if got, want := output.String(), "✓ Added alias ll\n"; got != want {
+		t.Errorf("output = %q, want %q", got, want)
 	}
 }
 

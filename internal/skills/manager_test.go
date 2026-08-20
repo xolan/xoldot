@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/xolan/xoldot/internal/status"
 )
 
 type fakeRunner struct {
@@ -15,6 +17,10 @@ type fakeRunner struct {
 	versions []map[string]string
 	failAt   int
 }
+
+type noopRunner struct{}
+
+func (noopRunner) Run(Command) error { return nil }
 
 func (runner *fakeRunner) Run(command Command) error {
 	runner.commands = append(runner.commands, command)
@@ -99,6 +105,52 @@ func TestManagerAddInstallsGlobalSkillAndClaudeFileMirror(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "skills.toml")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestManagerReportsEmptyUpdateAsSuccess(t *testing.T) {
+	var gotKind status.Kind
+	var gotText string
+	reporter := status.ReporterFunc(func(kind status.Kind, text string) error {
+		gotKind = kind
+		gotText = text
+		return nil
+	})
+	manager := Manager{
+		CatalogPath: filepath.Join(t.TempDir(), "skills.toml"),
+		Reporter:    reporter,
+	}
+
+	if err := manager.Update(""); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if gotKind != status.Success || gotText != "No skills to update" {
+		t.Errorf("reported (%d, %q)", gotKind, gotText)
+	}
+}
+
+func TestManagerReportsVerboseNpxCommand(t *testing.T) {
+	var gotKind status.Kind
+	var gotText string
+	reporter := status.ReporterFunc(func(kind status.Kind, text string) error {
+		gotKind = kind
+		gotText = text
+		return nil
+	})
+	manager := Manager{
+		CatalogPath: filepath.Join(t.TempDir(), "skills.toml"),
+		ManagedHome: t.TempDir(),
+		Verbose:     true,
+		Runner:      noopRunner{},
+		Reporter:    reporter,
+	}
+
+	if err := manager.runAdd("example", "https://github.com/example/skills", manager.ManagedHome); err != nil {
+		t.Fatalf("runAdd() error = %v", err)
+	}
+	want := "npx --yes " + npmPackage + " add https://github.com/example/skills --skill example --global --agent codex --yes"
+	if gotKind != status.Command || gotText != want {
+		t.Errorf("reported (%d, %q)", gotKind, gotText)
 	}
 }
 

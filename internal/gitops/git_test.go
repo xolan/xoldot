@@ -7,7 +7,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/xolan/xoldot/internal/status"
 )
+
+func bufferReporter(output *bytes.Buffer) status.Reporter {
+	return status.ReporterFunc(func(_ status.Kind, text string) error {
+		_, err := output.WriteString(text + "\n")
+		return err
+	})
+}
 
 func TestSyncPushesInitialCommit(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
@@ -18,7 +27,7 @@ func TestSyncPushesInitialCommit(t *testing.T) {
 	runGit(t, "", "init", "--bare", "--initial-branch=main", remote)
 
 	var output bytes.Buffer
-	runner := Runner{Dir: root, Stdout: &output, Stderr: &output}
+	runner := Runner{Dir: root, Stdout: &output, Stderr: &output, Reporter: bufferReporter(&output)}
 	if err := runner.Configure(remote, "main"); err != nil {
 		t.Fatalf("Configure() error = %v\n%s", err, output.String())
 	}
@@ -60,7 +69,7 @@ func TestCheckoutRemoteRestoresExistingConfiguration(t *testing.T) {
 
 	root := t.TempDir()
 	var output bytes.Buffer
-	runner := Runner{Dir: root, Stdout: &output, Stderr: &output}
+	runner := Runner{Dir: root, Stdout: &output, Stderr: &output, Reporter: bufferReporter(&output)}
 	if err := runner.Configure(remote, "main"); err != nil {
 		t.Fatalf("Configure() error = %v\n%s", err, output.String())
 	}
@@ -81,9 +90,19 @@ func TestCheckoutRemoteRestoresExistingConfiguration(t *testing.T) {
 }
 
 func TestCommandLeavesStdinNil(t *testing.T) {
-	runner := Runner{Dir: t.TempDir()}
+	var gotKind status.Kind
+	var gotText string
+	reporter := status.ReporterFunc(func(kind status.Kind, text string) error {
+		gotKind = kind
+		gotText = text
+		return nil
+	})
+	runner := Runner{Dir: t.TempDir(), Verbose: true, Reporter: reporter}
 	if got := runner.command("status").Stdin; got != nil {
 		t.Errorf("command stdin = %T, want nil (non-file stdin hangs Wait)", got)
+	}
+	if gotKind != status.Command || gotText != "git status" {
+		t.Errorf("reported (%d, %q)", gotKind, gotText)
 	}
 }
 
@@ -114,7 +133,7 @@ func TestSyncDryLeavesRepositoryUntouched(t *testing.T) {
 	runGit(t, "", "init", "--bare", "--initial-branch=main", remote)
 
 	var output bytes.Buffer
-	runner := Runner{Dir: root, Stdout: &output, Stderr: &output}
+	runner := Runner{Dir: root, Stdout: &output, Stderr: &output, Reporter: bufferReporter(&output)}
 	if err := runner.Configure(remote, "main"); err != nil {
 		t.Fatalf("Configure() error = %v\n%s", err, output.String())
 	}
@@ -124,7 +143,7 @@ func TestSyncDryLeavesRepositoryUntouched(t *testing.T) {
 	if err := runner.Sync("origin", "main", true); err != nil {
 		t.Fatalf("Sync() error = %v\n%s", err, output.String())
 	}
-	for _, want := range []string{"would commit", "would push to origin/main"} {
+	for _, want := range []string{"Would commit local changes", "Would push to origin/main"} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q:\n%s", want, output.String())
 		}

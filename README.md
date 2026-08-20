@@ -49,6 +49,25 @@ shells = ["bash", "zsh", "fish"]
 For testing or unusual layouts, `--config-dir DIR` overrides the configuration
 directory. `XOLDOT_CONFIG_HOME` provides the equivalent environment override.
 
+### Output
+
+xoldot prefixes human-readable progress with `›`, completed actions with `✓`,
+and warnings with `!`. `--verbose` adds the underlying Git and npx commands on
+stderr with a `+` prefix. Output from Git, npx, and tool installers passes
+through unchanged, which makes xoldot's own messages easy to distinguish:
+
+```text
+› Pulling origin/main with rebase
++ git pull --rebase origin main
+Already up to date.
+✓ Sync complete
+```
+
+Color is enabled only when the destination stream is a terminal. Set
+`NO_COLOR` or `TERM=dumb` to disable ANSI colors; the prefixes remain. Commands
+that return data, including `version`, `tool list`, and `skill list`, stay plain
+so their output can be piped or parsed.
+
 ### Tools
 
 Add a tool, then fill in its install commands in `tools.toml`:

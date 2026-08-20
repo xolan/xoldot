@@ -9,14 +9,16 @@ import (
 	"os/exec"
 	"strings"
 
+	reportstatus "github.com/xolan/xoldot/internal/status"
 	"github.com/xolan/xoldot/internal/urlutil"
 )
 
 type Runner struct {
-	Dir     string
-	Stdout  io.Writer
-	Stderr  io.Writer
-	Verbose bool
+	Dir      string
+	Stdout   io.Writer
+	Stderr   io.Writer
+	Verbose  bool
+	Reporter reportstatus.Reporter
 }
 
 type CheckoutError struct {
@@ -76,13 +78,13 @@ func (runner Runner) Sync(remote, branch string, dry bool) error {
 		return err
 	}
 	if hasChanges {
-		if err := runner.logf("sync: committing local changes\n"); err != nil {
+		if err := runner.reportf(reportstatus.Progress, "Committing local changes"); err != nil {
 			return err
 		}
 		if err := runner.run("commit", "-m", "xoldot sync"); err != nil {
 			return fmt.Errorf("commit local changes (is git user.name/user.email configured?): %w", err)
 		}
-	} else if err := runner.logf("sync: no local changes to commit\n"); err != nil {
+	} else if err := runner.reportf(reportstatus.Progress, "No local changes to commit"); err != nil {
 		return err
 	}
 
@@ -91,14 +93,14 @@ func (runner Runner) Sync(remote, branch string, dry bool) error {
 		return err
 	}
 	if remoteBranch {
-		if err := runner.logf("sync: pulling %s %s with rebase\n", remote, branch); err != nil {
+		if err := runner.reportf(reportstatus.Progress, "Pulling %s/%s with rebase", remote, branch); err != nil {
 			return err
 		}
 		if err := runner.run("pull", "--rebase", remote, branch); err != nil {
 			return err
 		}
 	}
-	if err := runner.logf("sync: pushing to %s/%s\n", remote, branch); err != nil {
+	if err := runner.reportf(reportstatus.Progress, "Pushing to %s/%s", remote, branch); err != nil {
 		return err
 	}
 	if err := runner.run("push", "-u", remote, "HEAD:"+branch); err != nil {
@@ -113,10 +115,14 @@ func (runner Runner) syncDry(remote, branch string) error {
 		return fmt.Errorf("git status: %w", err)
 	}
 	if strings.TrimSpace(status) == "" {
-		if err := runner.logf("sync: no local changes to commit\n"); err != nil {
+		if err := runner.reportf(reportstatus.Progress, "No local changes to commit"); err != nil {
 			return err
 		}
-	} else if err := runner.logf("sync: would commit:\n%s", status); err != nil {
+	} else if err := runner.reportf(
+		reportstatus.Progress,
+		"Would commit local changes\n%s",
+		strings.TrimSuffix(status, "\n"),
+	); err != nil {
 		return err
 	}
 	remoteBranch, err := runner.remoteBranchExists(remote, branch)
@@ -124,15 +130,15 @@ func (runner Runner) syncDry(remote, branch string) error {
 		return err
 	}
 	if remoteBranch {
-		if err := runner.logf("sync: would pull %s %s with rebase\n", remote, branch); err != nil {
+		if err := runner.reportf(reportstatus.Progress, "Would pull %s/%s with rebase", remote, branch); err != nil {
 			return err
 		}
 	}
-	return runner.logf("sync: would push to %s/%s\n", remote, branch)
+	return runner.reportf(reportstatus.Progress, "Would push to %s/%s", remote, branch)
 }
 
-func (runner Runner) logf(format string, arguments ...any) error {
-	if _, err := fmt.Fprintf(runner.Stdout, format, arguments...); err != nil {
+func (runner Runner) reportf(kind reportstatus.Kind, format string, arguments ...any) error {
+	if err := reportstatus.Reportf(runner.Reporter, kind, format, arguments...); err != nil {
 		return fmt.Errorf("write sync status: %w", err)
 	}
 	return nil
@@ -215,8 +221,8 @@ func (runner Runner) output(arguments ...string) (string, error) {
 }
 
 func (runner Runner) command(arguments ...string) *exec.Cmd {
-	if runner.Verbose && runner.Stderr != nil {
-		_, _ = fmt.Fprintf(runner.Stderr, "+ git %s\n", formatCommand(arguments))
+	if runner.Verbose {
+		_ = runner.reportf(reportstatus.Command, "git %s", formatCommand(arguments))
 	}
 	// Stdin stays nil: a non-*os.File stdin makes exec.Cmd copy in a
 	// goroutine that Wait blocks on until the next terminal read returns,

@@ -17,6 +17,7 @@ import (
 	"github.com/xolan/xoldot/internal/dotfiles"
 	"github.com/xolan/xoldot/internal/gitops"
 	agentskills "github.com/xolan/xoldot/internal/skills"
+	"github.com/xolan/xoldot/internal/status"
 	toolcatalog "github.com/xolan/xoldot/internal/tools"
 )
 
@@ -27,10 +28,18 @@ type app struct {
 	configDir   string
 	verbose     bool
 	style       styler
+	reporter    status.Reporter
 }
 
 func Run(arguments []string, input io.Reader, output, errorOutput io.Writer, version string) error {
-	application := &app{input: input, output: output, errorOutput: errorOutput, style: newStyler(output)}
+	style := newStyler(output)
+	application := &app{
+		input:       input,
+		output:      output,
+		errorOutput: errorOutput,
+		style:       style,
+		reporter:    newTerminalReporter(output, errorOutput, style),
+	}
 	root := application.rootCommand(version)
 	root.SetArgs(arguments)
 	root.SetOut(output)
@@ -228,7 +237,13 @@ func (a *app) paths() (config.Paths, error) {
 }
 
 func (a *app) gitRunner(root string) gitops.Runner {
-	return gitops.Runner{Dir: root, Stdout: a.output, Stderr: a.errorOutput, Verbose: a.verbose}
+	return gitops.Runner{
+		Dir:      root,
+		Stdout:   a.output,
+		Stderr:   a.errorOutput,
+		Verbose:  a.verbose,
+		Reporter: a.reporter,
+	}
 }
 
 func (a *app) setup() error {
@@ -247,7 +262,7 @@ func (a *app) setup() error {
 	}
 	git := cfg.GitSettings()
 
-	if err := writef(a.output, "Configuration directory: %s\n", a.style.bold(paths.Root)); err != nil {
+	if err := a.reportf(status.Progress, "Configuration directory: %s", a.style.bold(paths.Root)); err != nil {
 		return err
 	}
 	reader := bufio.NewReader(a.input)
@@ -264,9 +279,9 @@ func (a *app) setup() error {
 			return err
 		}
 		if git.Enabled {
-			return writef(a.output, "%s\n", a.style.success("Git remains enabled"))
+			return a.reportf(status.Success, "Git remains enabled")
 		}
-		return writef(a.output, "%s\n", a.style.warn("Git remains disabled; run setup again when a remote is ready"))
+		return a.reportf(status.Warning, "Git remains disabled; run setup again when a remote is ready")
 	}
 
 	branch, err := prompt(reader, a.output, a.style.bold(fmt.Sprintf("Git branch [%s]: ", git.Branch)))
@@ -298,7 +313,7 @@ func (a *app) setup() error {
 			return fmt.Errorf("inspect existing origin/%s before setup: %w", branch, err)
 		}
 		if checkedOut {
-			if err := writef(a.output, "%s\n", a.style.success(fmt.Sprintf("Checked out existing origin/%s", branch))); err != nil {
+			if err := a.reportf(status.Success, "Checked out existing origin/%s", branch); err != nil {
 				return err
 			}
 		}
@@ -317,7 +332,7 @@ func (a *app) setup() error {
 	if err := config.Save(paths.Config, cfg); err != nil {
 		return err
 	}
-	return writef(a.output, "%s\n", a.style.success(fmt.Sprintf("Git enabled with origin on branch %s", branch)))
+	return a.reportf(status.Success, "Git enabled with origin on branch %s", branch)
 }
 
 func prompt(reader *bufio.Reader, output io.Writer, message string) (string, error) {
@@ -357,7 +372,7 @@ func (a *app) toolAdd(name string) error {
 	if err := toolcatalog.Save(paths.Tools, catalog); err != nil {
 		return err
 	}
-	return writef(a.output, "%s; edit %s to set install commands\n", a.style.success("Added tool "+name), paths.Tools)
+	return a.reportf(status.Success, "Added tool %s; edit %s to set install commands", name, paths.Tools)
 }
 
 func (a *app) toolList() error {
@@ -383,7 +398,7 @@ func (a *app) toolRemove(name string) error {
 	if err := toolcatalog.Save(paths.Tools, catalog); err != nil {
 		return err
 	}
-	return writef(a.output, "%s\n", a.style.success("Removed tool "+name))
+	return a.reportf(status.Success, "Removed tool %s", name)
 }
 
 func (a *app) aliasAdd(name, command string) error {
@@ -409,7 +424,7 @@ func (a *app) aliasAdd(name, command string) error {
 	if updated {
 		verb = "Updated"
 	}
-	return writef(a.output, "%s\n", a.style.success(fmt.Sprintf("%s alias %s", verb, name)))
+	return a.reportf(status.Success, "%s alias %s", verb, name)
 }
 
 func (a *app) skillManager() (agentskills.Manager, error) {
@@ -432,6 +447,7 @@ func (a *app) skillManager() (agentskills.Manager, error) {
 		Stdout:          a.output,
 		Stderr:          a.errorOutput,
 		Verbose:         a.verbose,
+		Reporter:        a.reporter,
 	}, nil
 }
 
@@ -494,27 +510,38 @@ func (a *app) apply(dry bool) error {
 		return err
 	}
 
-	if err := toolcatalog.Apply(catalog, toolcatalog.CurrentPlatform(), a.input, a.output, a.errorOutput, dry); err != nil {
+	if err := toolcatalog.Apply(catalog, toolcatalog.CurrentPlatform(), a.input, a.output, a.errorOutput, a.reporter, dry); err != nil {
 		return err
 	}
-	linked, err := dotfilePlan.Apply(a.output, dry)
+	linked, err := dotfilePlan.Apply(a.reporter, dry)
 	if err != nil {
 		return err
 	}
 	if dry {
-		if err := writef(a.output, "dotfiles: would link %d, would remove %d, %d already current\n", linked.Created, linked.Removed, linked.Current); err != nil {
+		if err := a.reportf(
+			status.Progress,
+			"Dotfile links: would create %d, remove %d, leave %d current",
+			linked.Created,
+			linked.Removed,
+			linked.Current,
+		); err != nil {
 			return err
 		}
-		return writef(a.output, "aliases: would render %s\n", aliasPath)
+		return a.reportf(status.Progress, "Would render aliases to %s", aliasPath)
 	}
-	summary := fmt.Sprintf("dotfiles: %d linked, %d removed, %d already current", linked.Created, linked.Removed, linked.Current)
-	if err := writef(a.output, "%s\n", a.style.success(summary)); err != nil {
+	if err := a.reportf(
+		status.Success,
+		"Dotfile links: %d created, %d removed, %d already current",
+		linked.Created,
+		linked.Removed,
+		linked.Current,
+	); err != nil {
 		return err
 	}
 	if err := aliasPlan.Apply(); err != nil {
 		return err
 	}
-	return writef(a.output, "%s\n", a.style.success("aliases: rendered "+aliasPath))
+	return a.reportf(status.Success, "Rendered aliases to %s", aliasPath)
 }
 
 func (a *app) sync(dry bool) error {
@@ -534,9 +561,13 @@ func (a *app) sync(dry bool) error {
 		return err
 	}
 	if dry {
-		return write(a.output, "Dry run complete; nothing was changed\n")
+		return a.reportf(status.Success, "Dry run complete; nothing changed")
 	}
-	return writef(a.output, "%s\n", a.style.success("Sync complete"))
+	return a.reportf(status.Success, "Sync complete")
+}
+
+func (a *app) reportf(kind status.Kind, format string, arguments ...any) error {
+	return status.Reportf(a.reporter, kind, format, arguments...)
 }
 
 func write(output io.Writer, value string) error {
