@@ -4,6 +4,17 @@
 home directory. Its configuration lives in `~/.config/xoldot` by default and
 can be synchronized through Git.
 
+## Table of contents
+
+- [Get started](#get-started)
+- [Tools](#tools)
+- [Agent skills](#agent-skills)
+- [Aliases](#aliases)
+- [Managed home files](#managed-home-files)
+- [Sync](#sync)
+- [Overrides and limits](#overrides-and-limits)
+- [Development](#development)
+
 ## Get started
 
 Run the interactive setup:
@@ -72,6 +83,17 @@ macos = "brew install ripgrep"
 [tool.install.linux]
 default = "sudo apt install ripgrep"
 arch = "yay -S ripgrep"
+
+[[tool]]
+name = "jq"
+check = "command -v jq"
+
+[tool.install]
+macos = "brew install jq"
+
+[tool.install.linux]
+default = "sudo apt install jq"
+arch = "yay -S jq"
 ```
 
 On Linux, distribution IDs such as `arch` override `default`. xoldot reads the
