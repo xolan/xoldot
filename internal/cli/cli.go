@@ -47,9 +47,11 @@ func (a *app) rootCommand(version string) *cobra.Command {
 		SilenceErrors: true,
 		Example: `  xoldot setup
   xoldot tool add ripgrep
+  xoldot tool list
   xoldot alias add ll 'ls -la'
   xoldot skill add code-review@owner/repo
   xoldot skill add code-review --from ./skills/code-review
+  xoldot skill list
   xoldot skill remove code-review
   xoldot skill update
   xoldot apply --dry
@@ -84,6 +86,14 @@ func (a *app) rootCommand(version string) *cobra.Command {
 			Args:  cobra.ExactArgs(1),
 			RunE: func(_ *cobra.Command, arguments []string) error {
 				return a.toolAdd(arguments[0])
+			},
+		},
+		&cobra.Command{
+			Use:   "list",
+			Short: "List tools in the catalog",
+			Args:  cobra.NoArgs,
+			RunE: func(*cobra.Command, []string) error {
+				return a.toolList()
 			},
 		},
 		&cobra.Command{
@@ -133,6 +143,14 @@ func (a *app) rootCommand(version string) *cobra.Command {
 	skillAdd.Flags().StringVar(&skillSource, "from", "", "install the skill from an explicit source")
 	skillCommand.AddCommand(
 		skillAdd,
+		&cobra.Command{
+			Use:   "list",
+			Short: "List skills in the catalog",
+			Args:  cobra.NoArgs,
+			RunE: func(*cobra.Command, []string) error {
+				return a.skillList()
+			},
+		},
 		&cobra.Command{
 			Use:   "remove <skill>",
 			Short: "Uninstall a skill and drop it from the catalog",
@@ -342,6 +360,18 @@ func (a *app) toolAdd(name string) error {
 	return writef(a.output, "%s; edit %s to set install commands\n", a.style.success("Added tool "+name), paths.Tools)
 }
 
+func (a *app) toolList() error {
+	_, catalog, err := a.toolCatalog()
+	if err != nil {
+		return err
+	}
+	names := make([]string, len(catalog.Tools))
+	for index, tool := range catalog.Tools {
+		names[index] = tool.Name
+	}
+	return writeSortedNames(a.output, names)
+}
+
 func (a *app) toolRemove(name string) error {
 	paths, catalog, err := a.toolCatalog()
 	if err != nil {
@@ -398,6 +428,22 @@ func (a *app) skillManager() (agentskills.Manager, error) {
 		Stderr:      a.errorOutput,
 		Verbose:     a.verbose,
 	}, nil
+}
+
+func (a *app) skillList() error {
+	manager, err := a.skillManager()
+	if err != nil {
+		return err
+	}
+	catalog, err := agentskills.Load(manager.CatalogPath)
+	if err != nil {
+		return err
+	}
+	names := make([]string, len(catalog.Skills))
+	for index, skill := range catalog.Skills {
+		names[index] = skill.Name
+	}
+	return writeSortedNames(a.output, names)
 }
 
 func (a *app) apply(dry bool) error {
@@ -495,4 +541,12 @@ func writef(output io.Writer, format string, arguments ...any) error {
 		return fmt.Errorf("write output: %w", err)
 	}
 	return nil
+}
+
+func writeSortedNames(output io.Writer, names []string) error {
+	slices.Sort(names)
+	if len(names) == 0 {
+		return nil
+	}
+	return write(output, strings.Join(names, "\n")+"\n")
 }

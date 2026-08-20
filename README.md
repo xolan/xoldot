@@ -120,6 +120,12 @@ Remove an entry with:
 xoldot tool remove ripgrep
 ```
 
+List cataloged tools, one name per line:
+
+```sh
+xoldot tool list
+```
+
 ## Agent skills
 
 Skill commands manage global, home-folder agent skills. The shorthand form
@@ -136,6 +142,12 @@ xoldot skill add unslop --from https://github.com/poteto/noodle
 xoldot skill update unslop       # update one skill
 xoldot skills update             # update all; "skills" is an alias
 xoldot skill remove unslop
+```
+
+List cataloged skills, one name per line:
+
+```sh
+xoldot skill list
 ```
 
 These commands require Node.js 22.20 or newer and `npx`. Development uses the

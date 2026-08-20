@@ -153,12 +153,76 @@ func TestSkillsPluralAliasUpdatesEmptyCatalog(t *testing.T) {
 	}
 }
 
+func TestToolListPrintsCatalogNamesInAlphabeticalOrder(t *testing.T) {
+	root := t.TempDir()
+	paths := config.NewPaths(root)
+	if err := config.Initialize(paths); err != nil {
+		t.Fatal(err)
+	}
+	tools := `[[tool]]
+name = "ripgrep"
+
+[[tool]]
+name = "jq"
+`
+	if err := os.WriteFile(paths.Tools, []byte(tools), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := Run(
+		[]string{"--config-dir", root, "tool", "list"},
+		bytes.NewReader(nil),
+		&output,
+		&output,
+		"test",
+	); err != nil {
+		t.Fatalf("tool list error = %v", err)
+	}
+	if got, want := output.String(), "jq\nripgrep\n"; got != want {
+		t.Errorf("output = %q, want %q", got, want)
+	}
+}
+
+func TestSkillsListPrintsCatalogNamesInAlphabeticalOrder(t *testing.T) {
+	root := t.TempDir()
+	paths := config.NewPaths(root)
+	if err := config.Initialize(paths); err != nil {
+		t.Fatal(err)
+	}
+	skills := `[[skill]]
+name = "write-tests"
+source = "https://example.com/write-tests"
+
+[[skill]]
+name = "code-review"
+source = "https://example.com/code-review"
+`
+	if err := os.WriteFile(paths.Skills, []byte(skills), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := Run(
+		[]string{"--config-dir", root, "skills", "list"},
+		bytes.NewReader(nil),
+		&output,
+		&output,
+		"test",
+	); err != nil {
+		t.Fatalf("skills list error = %v", err)
+	}
+	if got, want := output.String(), "code-review\nwrite-tests\n"; got != want {
+		t.Errorf("output = %q, want %q", got, want)
+	}
+}
+
 func TestHelpIncludesSkillCommands(t *testing.T) {
 	var output bytes.Buffer
 	if err := Run([]string{"help"}, bytes.NewReader(nil), &output, &output, "test"); err != nil {
 		t.Fatal(err)
 	}
-	for _, command := range []string{"skill add", "skill remove", "skill update"} {
+	for _, command := range []string{"skill add", "skill list", "skill remove", "skill update"} {
 		if !strings.Contains(output.String(), command) {
 			t.Errorf("help does not include %q", command)
 		}
