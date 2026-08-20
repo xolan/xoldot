@@ -115,14 +115,14 @@ func TestLinkStillMapsOrdinaryManagedFilesIndividually(t *testing.T) {
 	}
 }
 
-func TestLinkCreatesSkillDirectoryLinks(t *testing.T) {
+func TestLinkCreatesSkillAndCompanionAgentLinks(t *testing.T) {
 	root := t.TempDir()
 	configRoot := filepath.Join(root, "config")
 	managed := filepath.Join(configRoot, "files", "home")
 	home := filepath.Join(root, "home")
 	canonical := filepath.Join(managed, ".agents", "skills", "example", "SKILL.md")
 	compatibility := filepath.Join(managed, ".claude", "skills", "example", "SKILL.md")
-	agent := filepath.Join(managed, ".agents", "skills", "example", ".xoldot-agents", "reviewer.md")
+	agent := filepath.Join(managed, ".agents", "agents", "reviewer.md")
 	agentLink := filepath.Join(managed, ".claude", "agents", "reviewer.md")
 	if err := os.MkdirAll(filepath.Dir(canonical), 0o755); err != nil {
 		t.Fatal(err)
@@ -161,8 +161,8 @@ func TestLinkCreatesSkillDirectoryLinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Link() error = %v", err)
 	}
-	if result.Created != 3 {
-		t.Fatalf("created = %d, want 3", result.Created)
+	if result.Created != 4 {
+		t.Fatalf("created = %d, want 4", result.Created)
 	}
 	homeCanonical := filepath.Join(home, ".agents", "skills", "example")
 	destination, err := os.Readlink(homeCanonical)
@@ -195,8 +195,18 @@ func TestLinkCreatesSkillDirectoryLinks(t *testing.T) {
 	if string(data) != "reviewer" {
 		t.Errorf("agent contents = %q", data)
 	}
+	result, err = Link(managed, home, configRoot, discardReporter, false)
+	if err != nil {
+		t.Fatalf("second Link() error = %v", err)
+	}
+	if result.Current != 4 {
+		t.Errorf("second link current = %d, want 4", result.Current)
+	}
 
 	if err := os.RemoveAll(filepath.Join(managed, ".agents", "skills", "example")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(agent); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.RemoveAll(filepath.Join(managed, ".claude", "skills", "example")); err != nil {
@@ -209,13 +219,14 @@ func TestLinkCreatesSkillDirectoryLinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Link() after skill removal error = %v", err)
 	}
-	if result.Removed != 3 {
-		t.Errorf("removed = %d, want 3", result.Removed)
+	if result.Removed != 4 {
+		t.Errorf("removed = %d, want 4", result.Removed)
 	}
 	for _, target := range []string{
 		homeCanonical,
 		filepath.Dir(homeCompatibility),
 		homeAgent,
+		filepath.Join(home, ".agents", "agents", "reviewer.md"),
 	} {
 		if _, statErr := os.Lstat(target); !errors.Is(statErr, os.ErrNotExist) {
 			t.Errorf("stale skill link %s remains: %v", target, statErr)

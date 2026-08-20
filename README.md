@@ -116,10 +116,12 @@ under `files/home/.agents/skills`. Apply links them into `~/.agents/skills` and
 
 If the selected skill belongs to a plugin with an `agents` directory, xoldot
 also installs the Markdown agent definitions that the skill names from the
-nearest such directory. Apply links these companion agents into
-`~/.claude/agents`. Git-backed sources require `git` for companion-agent
-discovery. Xoldot does not convert Markdown agent definitions into Codex TOML
-agent configurations.
+nearest such directory. Under `files/home/.agents`, it uses the same sibling
+layout as the plugin: `skills/<skill>` and `agents/<agent>.md`. Agent ownership
+is recorded in `skills.toml`. Apply links companion agents into
+`~/.agents/agents` and `~/.claude/agents`. Git-backed sources require `git` for
+companion-agent discovery. Xoldot does not convert Markdown agent definitions
+into Codex TOML agent configurations.
 
 xoldot refuses to update or remove a skill or companion agent with local
 changes. It also refuses to overwrite an agent owned by another skill or by the

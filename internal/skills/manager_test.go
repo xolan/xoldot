@@ -155,12 +155,12 @@ func TestManagerAddInstallsCompanionAgents(t *testing.T) {
 		t.Fatalf("Add() error = %v", err)
 	}
 	for relative, want := range runner.agentVersions[0] {
-		canonical := filepath.Join(manager.ManagedHome, ".agents", "skills", "thermos", managedAgentsDirectory, filepath.FromSlash(relative))
+		canonical := filepath.Join(manager.ManagedHome, ".agents", "agents", filepath.FromSlash(relative))
 		contents, err := os.ReadFile(canonical)
 		if err != nil || string(contents) != want {
 			t.Errorf("agent %s = %q, %v", relative, contents, err)
 		}
-		link := managedAgentPath(manager.ManagedHome, filepath.FromSlash(relative))
+		link := claudeAgentPath(manager.ManagedHome, filepath.FromSlash(relative))
 		destination, err := os.Readlink(link)
 		if err != nil {
 			t.Fatalf("Readlink(%s) error = %v", link, err)
@@ -172,6 +172,17 @@ func TestManagerAddInstallsCompanionAgents(t *testing.T) {
 		if destination != expected {
 			t.Errorf("agent destination = %q, want %q", destination, expected)
 		}
+	}
+	catalog, err := Load(manager.CatalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(catalog.Skills[0].Agents, []string{"nested/quality.md", "reviewer.md"}) {
+		t.Errorf("catalog agents = %q", catalog.Skills[0].Agents)
+	}
+	legacyMirror := filepath.Join(manager.compatibilityPath("thermos"), legacyManagedAgentsDirectory)
+	if _, err := os.Lstat(legacyMirror); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("companion agents leaked into skill mirror: %v", err)
 	}
 }
 
@@ -185,10 +196,10 @@ func TestManagerAddIgnoresUnreferencedPluginAgents(t *testing.T) {
 	if err := manager.Add("thermos", "https://github.com/poteto/plugins"); err != nil {
 		t.Fatalf("Add() error = %v", err)
 	}
-	if _, err := os.Stat(managedAgentPath(manager.ManagedHome, "reviewer.md")); err != nil {
+	if _, err := os.Stat(claudeAgentPath(manager.ManagedHome, "reviewer.md")); err != nil {
 		t.Errorf("referenced agent missing: %v", err)
 	}
-	if _, err := os.Lstat(managedAgentPath(manager.ManagedHome, "unrelated.md")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(claudeAgentPath(manager.ManagedHome, "unrelated.md")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("unreferenced agent installed: %v", err)
 	}
 }
@@ -209,21 +220,96 @@ func TestManagerUpdateReplacesCompanionAgents(t *testing.T) {
 	if err := manager.Update("thermos"); err != nil {
 		t.Fatalf("Update() error = %v", err)
 	}
-	old := managedAgentPath(manager.ManagedHome, "old-reviewer.md")
+	old := claudeAgentPath(manager.ManagedHome, "old-reviewer.md")
 	if _, err := os.Lstat(old); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("old agent remains: %v", err)
 	}
-	updated := managedAgentPath(manager.ManagedHome, "new-reviewer.md")
+	updated := claudeAgentPath(manager.ManagedHome, "new-reviewer.md")
 	contents, err := os.ReadFile(updated)
 	if err != nil || string(contents) != "new agent" {
 		t.Errorf("updated agent = %q, %v", contents, err)
 	}
 }
 
+func TestManagerUpdateMigratesLegacyCompanionAgents(t *testing.T) {
+	manager, runner, _ := testManager(t, []map[string]string{
+		{"SKILL.md": "Use reviewer. Old."},
+		{"SKILL.md": "Use reviewer. New."},
+	})
+	runner.agentVersions = []map[string]string{
+		{"reviewer.md": "old agent"},
+		{"reviewer.md": "new agent"},
+	}
+	if err := manager.Add("thermos", "https://github.com/poteto/plugins"); err != nil {
+		t.Fatal(err)
+	}
+
+	canonical := manager.canonicalPath("thermos")
+	compatibility := manager.compatibilityPath("thermos")
+	flatAgent := canonicalAgentPath(manager.ManagedHome, "reviewer.md")
+	legacyAgent := filepath.Join(canonical, legacyManagedAgentsDirectory, "reviewer.md")
+	if err := os.MkdirAll(filepath.Dir(legacyAgent), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(flatAgent, legacyAgent); err != nil {
+		t.Fatal(err)
+	}
+	link := claudeAgentPath(manager.ManagedHome, "reviewer.md")
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	destination, err := filepath.Rel(filepath.Dir(link), legacyAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(destination, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(compatibility); err != nil {
+		t.Fatal(err)
+	}
+	if err := buildCompatibilityMirror(canonical, compatibility); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := Load(manager.CatalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog.Skills[0].Agents = nil
+	catalog.Skills[0].Digest, err = digestSkill(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(manager.CatalogPath, catalog); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.Update("thermos"); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(canonical, legacyManagedAgentsDirectory)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("legacy agent directory remains: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(compatibility, legacyManagedAgentsDirectory)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("legacy agent mirror remains: %v", err)
+	}
+	contents, err := os.ReadFile(flatAgent)
+	if err != nil || string(contents) != "new agent" {
+		t.Errorf("migrated agent = %q, %v", contents, err)
+	}
+	catalog, err = Load(manager.CatalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(catalog.Skills[0].Agents, []string{"reviewer.md"}) {
+		t.Errorf("catalog agents = %q", catalog.Skills[0].Agents)
+	}
+}
+
 func TestManagerAddRefusesUnownedCompanionAgent(t *testing.T) {
 	manager, runner, _ := testManager(t, []map[string]string{{"SKILL.md": "Use reviewer."}})
 	runner.agentVersions = []map[string]string{{"reviewer.md": "managed agent"}}
-	path := managedAgentPath(manager.ManagedHome, "reviewer.md")
+	path := claudeAgentPath(manager.ManagedHome, "reviewer.md")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +339,7 @@ func TestManagerUpdateRefusesLocallyModifiedCompanionAgent(t *testing.T) {
 	if err := manager.Add("thermos", "https://github.com/poteto/plugins"); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(managedAgentPath(manager.ManagedHome, "reviewer.md"), []byte("local edit"), 0o644); err != nil {
+	if err := os.WriteFile(claudeAgentPath(manager.ManagedHome, "reviewer.md"), []byte("local edit"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -544,8 +630,11 @@ func TestManagerRemoveDeletesCompanionAgents(t *testing.T) {
 	if err := manager.Remove("thermos"); err != nil {
 		t.Fatalf("Remove() error = %v", err)
 	}
-	if _, err := os.Lstat(managedAgentPath(manager.ManagedHome, "reviewer.md")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(claudeAgentPath(manager.ManagedHome, "reviewer.md")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("removed companion agent remains: %v", err)
+	}
+	if _, err := os.Lstat(canonicalAgentPath(manager.ManagedHome, "reviewer.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("removed canonical companion agent remains: %v", err)
 	}
 }
 

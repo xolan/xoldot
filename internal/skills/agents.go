@@ -17,7 +17,7 @@ import (
 	"github.com/xolan/xoldot/internal/urlutil"
 )
 
-const managedAgentsDirectory = ".xoldot-agents"
+const legacyManagedAgentsDirectory = ".xoldot-agents"
 
 type RepositoryRequest struct {
 	Name        string
@@ -252,19 +252,20 @@ func copyCompanionAgents(candidate *stagedSkill, sourceRoot string) error {
 	if err != nil {
 		return fmt.Errorf("read installed skill while selecting companion agents: %w", err)
 	}
-	destinationRoot := filepath.Join(candidate.canonical, managedAgentsDirectory)
+	stagedHome := filepath.Join(candidate.root, "home")
 	return walkAgentFiles(sourceRoot, func(relative string, contents []byte, mode fs.FileMode) (bool, error) {
 		if !referencesAgent(skill, contents, relative) {
 			return false, nil
 		}
-		destination := filepath.Join(destinationRoot, relative)
+		relative = filepath.ToSlash(relative)
+		destination := canonicalAgentPath(stagedHome, relative)
 		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 			return false, err
 		}
 		if err := os.WriteFile(destination, contents, mode); err != nil {
 			return false, fmt.Errorf("write companion agent %s: %w", destination, err)
 		}
-		link := filepath.Join(candidate.root, "home", ".claude", "agents", relative)
+		link := claudeAgentPath(stagedHome, relative)
 		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
 			return false, err
 		}
@@ -275,7 +276,7 @@ func copyCompanionAgents(candidate *stagedSkill, sourceRoot string) error {
 		if err := os.Symlink(linkDestination, link); err != nil {
 			return false, err
 		}
-		candidate.agents[relative] = link
+		candidate.agents[relative] = struct{}{}
 		return false, nil
 	})
 }
@@ -295,15 +296,17 @@ func referencesAgent(skill, agent []byte, relative string) bool {
 	return bytes.Contains(skill, []byte(name))
 }
 
-func ownedAgents(canonical, managedHome string) ([]string, error) {
-	root := filepath.Join(canonical, managedAgentsDirectory)
+func ownedAgents(skill Skill, canonical, managedHome string) ([]string, error) {
+	if len(skill.Agents) > 0 {
+		return validateOwnedAgentLinks(canonicalAgentsRoot(managedHome), skill.Agents, managedHome)
+	}
+	root := filepath.Join(canonical, legacyManagedAgentsDirectory)
 	if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	} else if err != nil {
 		return nil, fmt.Errorf("inspect managed companion agents: %w", err)
 	}
 	var relatives []string
-	var links []string
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -325,15 +328,25 @@ func ownedAgents(canonical, managedHome string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		link := managedAgentPath(managedHome, relative)
-		links = append(links, link)
-		relatives = append(relatives, relative)
+		relatives = append(relatives, filepath.ToSlash(relative))
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	if err := validateManagedPaths(managedHome, links...); err != nil {
+	return validateOwnedAgentLinks(root, relatives, managedHome)
+}
+
+func validateOwnedAgentLinks(root string, relatives []string, managedHome string) ([]string, error) {
+	paths := make([]string, 0, len(relatives)*2)
+	links := make([]string, 0, len(relatives))
+	for _, relative := range relatives {
+		path := filepath.Join(root, filepath.FromSlash(relative))
+		link := claudeAgentPath(managedHome, relative)
+		paths = append(paths, path, link)
+		links = append(links, link)
+	}
+	if err := validateManagedPaths(managedHome, paths...); err != nil {
 		return nil, err
 	}
 	for index, link := range links {
@@ -351,7 +364,7 @@ func ownedAgents(canonical, managedHome string) ([]string, error) {
 		if !filepath.IsAbs(destination) {
 			destination = filepath.Join(filepath.Dir(link), destination)
 		}
-		expected := filepath.Join(root, relatives[index])
+		expected := filepath.Join(root, filepath.FromSlash(relatives[index]))
 		if filepath.Clean(destination) != expected {
 			return nil, fmt.Errorf("claude agent symlink %s is not owned by xoldot", link)
 		}
@@ -366,15 +379,18 @@ func (manager Manager) validateNewAgentPaths(candidate stagedSkill, previous []s
 	}
 	paths := make([]string, 0, len(candidate.agents))
 	for relative := range candidate.agents {
-		path := managedAgentPath(manager.ManagedHome, relative)
-		paths = append(paths, path)
+		canonical := canonicalAgentPath(manager.ManagedHome, relative)
+		compatibility := claudeAgentPath(manager.ManagedHome, relative)
+		paths = append(paths, canonical, compatibility)
 		if _, replacing := previousSet[relative]; replacing {
 			continue
 		}
-		if _, err := os.Lstat(path); err == nil {
-			return fmt.Errorf("claude agent path %s already exists but is not owned by this skill", path)
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("inspect Claude agent path %s: %w", path, err)
+		for _, path := range []string{canonical, compatibility} {
+			if _, err := os.Lstat(path); err == nil {
+				return fmt.Errorf("agent path %s already exists but is not owned by this skill", path)
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("inspect agent path %s: %w", path, err)
+			}
 		}
 	}
 	if len(paths) == 0 {
@@ -383,6 +399,14 @@ func (manager Manager) validateNewAgentPaths(candidate stagedSkill, previous []s
 	return validateManagedPaths(manager.ManagedHome, paths...)
 }
 
-func managedAgentPath(managedHome, relative string) string {
-	return filepath.Join(managedHome, ".claude", "agents", relative)
+func claudeAgentPath(managedHome, relative string) string {
+	return filepath.Join(managedHome, ".claude", "agents", filepath.FromSlash(relative))
+}
+
+func canonicalAgentPath(managedHome, relative string) string {
+	return filepath.Join(canonicalAgentsRoot(managedHome), filepath.FromSlash(relative))
+}
+
+func canonicalAgentsRoot(managedHome string) string {
+	return filepath.Join(managedHome, ".agents", "agents")
 }

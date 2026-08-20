@@ -12,7 +12,8 @@ type stagedSkill struct {
 	root          string
 	canonical     string
 	compatibility string
-	agents        map[string]string
+	agents        map[string]struct{}
+	agentNames    []string
 	digest        string
 }
 
@@ -25,7 +26,7 @@ func (manager Manager) stageSkill(name, source string) (stagedSkill, error) {
 		root:          root,
 		canonical:     filepath.Join(root, "home", ".agents", "skills", name),
 		compatibility: filepath.Join(root, "home", ".claude", "skills", name),
-		agents:        make(map[string]string),
+		agents:        make(map[string]struct{}),
 	}
 	managedHome := filepath.Join(root, "home")
 	if err := os.MkdirAll(managedHome, 0o755); err != nil {
@@ -49,7 +50,11 @@ func (manager Manager) stageSkill(name, source string) (stagedSkill, error) {
 		candidate.cleanup()
 		return stagedSkill{}, err
 	}
-	candidate.digest, err = digestSkill(candidate.canonical)
+	for name := range candidate.agents {
+		candidate.agentNames = append(candidate.agentNames, name)
+	}
+	sort.Strings(candidate.agentNames)
+	candidate.digest, err = digestSkillWithAgents(candidate.canonical, managedHome, candidate.agentNames)
 	if err != nil {
 		candidate.cleanup()
 		return stagedSkill{}, err
@@ -125,7 +130,10 @@ func replaceSkill(candidate stagedSkill, canonical, compatibility, managedHome s
 func removeSkill(canonical, compatibility, managedHome string, agents []string, save func() error) error {
 	paths := []transactionPath{{live: canonical}, {live: compatibility}}
 	for _, relative := range agents {
-		paths = append(paths, transactionPath{live: managedAgentPath(managedHome, relative)})
+		paths = append(paths,
+			transactionPath{live: canonicalAgentPath(managedHome, relative)},
+			transactionPath{live: claudeAgentPath(managedHome, relative)},
+		)
 	}
 	transaction, err := beginSkillTransaction(paths, managedHome, true)
 	if err != nil {
@@ -155,10 +163,16 @@ func replacementPaths(candidate stagedSkill, canonical, compatibility, managedHo
 	}
 	sort.Strings(relatives)
 	for _, relative := range relatives {
-		paths = append(paths, transactionPath{
-			live:      managedAgentPath(managedHome, relative),
-			candidate: candidate.agents[relative],
-		})
+		candidateAgent := ""
+		candidateLink := ""
+		if _, exists := candidate.agents[relative]; exists {
+			candidateAgent = canonicalAgentPath(filepath.Join(candidate.root, "home"), relative)
+			candidateLink = claudeAgentPath(filepath.Join(candidate.root, "home"), relative)
+		}
+		paths = append(paths,
+			transactionPath{live: canonicalAgentPath(managedHome, relative), candidate: candidateAgent},
+			transactionPath{live: claudeAgentPath(managedHome, relative), candidate: candidateLink},
+		)
 	}
 	return paths
 }

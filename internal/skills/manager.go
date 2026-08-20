@@ -105,7 +105,12 @@ func (manager Manager) Add(name, source string) error {
 		candidate.cleanup()
 		return err
 	}
-	catalog.Skills = append(catalog.Skills, Skill{Name: name, Source: source, Digest: candidate.digest})
+	catalog.Skills = append(catalog.Skills, Skill{
+		Name:   name,
+		Source: source,
+		Digest: candidate.digest,
+		Agents: candidate.agentNames,
+	})
 	if err := replaceSkill(candidate, canonical, compatibility, manager.ManagedHome, nil, false, func() error {
 		return Save(manager.CatalogPath, catalog)
 	}); err != nil {
@@ -196,6 +201,7 @@ func (manager Manager) Update(name string) error {
 			return err
 		}
 		catalog.Skills[index].Digest = candidate.digest
+		catalog.Skills[index].Agents = candidate.agentNames
 		if err := replaceSkill(candidate, canonical, compatibility, manager.ManagedHome, agents, true, func() error {
 			return Save(manager.CatalogPath, catalog)
 		}); err != nil {
@@ -348,7 +354,7 @@ func environmentValue(environment []string, key string) (string, bool) {
 }
 
 func verifyOwnedSkill(skill Skill, canonical, compatibility, managedHome string) ([]string, error) {
-	digest, err := digestSkill(canonical)
+	digest, err := digestSkillWithAgents(canonical, managedHome, skill.Agents)
 	if err != nil {
 		return nil, err
 	}
@@ -358,7 +364,39 @@ func verifyOwnedSkill(skill Skill, canonical, compatibility, managedHome string)
 	if err := validateCompatibilityMirror(canonical, compatibility); err != nil {
 		return nil, err
 	}
-	return ownedAgents(canonical, managedHome)
+	return ownedAgents(skill, canonical, managedHome)
+}
+
+func digestSkillWithAgents(root, managedHome string, agents []string) (string, error) {
+	skillDigest, err := digestSkill(root)
+	if err != nil || len(agents) == 0 {
+		return skillDigest, err
+	}
+	hash := sha256.New()
+	if err := writeDigestField(hash, skillDigest); err != nil {
+		return "", err
+	}
+	agents = append([]string(nil), agents...)
+	sort.Strings(agents)
+	for _, relative := range agents {
+		path := canonicalAgentPath(managedHome, relative)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return "", fmt.Errorf("inspect managed companion agent %s: %w", path, err)
+		}
+		if !info.Mode().IsRegular() {
+			return "", fmt.Errorf("managed companion agent %s is not an ordinary file", path)
+		}
+		for _, field := range []string{relative, info.Mode().Perm().String()} {
+			if err := writeDigestField(hash, field); err != nil {
+				return "", err
+			}
+		}
+		if err := writeDigestFile(hash, path, info.Size()); err != nil {
+			return "", err
+		}
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func digestSkill(root string) (string, error) {
@@ -404,19 +442,7 @@ func digestSkill(root string) (string, error) {
 		if relative == "SKILL.md" {
 			hasSkillFile = true
 		}
-		if err := binary.Write(hash, binary.BigEndian, uint64(info.Size())); err != nil {
-			return err
-		}
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		_, copyErr := io.Copy(hash, file)
-		closeErr := file.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		return closeErr
+		return writeDigestFile(hash, path, info.Size())
 	})
 	if err != nil {
 		return "", fmt.Errorf("hash managed skill %s: %w", root, err)
@@ -433,6 +459,22 @@ func writeDigestField(destination io.Writer, value string) error {
 	}
 	_, err := io.WriteString(destination, value)
 	return err
+}
+
+func writeDigestFile(destination io.Writer, path string, size int64) error {
+	if err := binary.Write(destination, binary.BigEndian, uint64(size)); err != nil {
+		return err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(destination, file)
+	closeErr := file.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
 }
 
 func validateCompatibilityMirror(canonical, compatibility string) error {

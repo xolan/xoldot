@@ -103,3 +103,18 @@ digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 		t.Fatalf("Load() error = %v, want duplicate error", err)
 	}
 }
+
+func TestValidateRejectsUnsafeOrMultiplyOwnedAgents(t *testing.T) {
+	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	for _, catalog := range []Catalog{
+		{Skills: []Skill{{Name: "one", Source: "owner/repo", Digest: digest, Agents: []string{"../reviewer.md"}}}},
+		{Skills: []Skill{
+			{Name: "one", Source: "owner/repo", Digest: digest, Agents: []string{"reviewer.md"}},
+			{Name: "two", Source: "owner/repo", Digest: digest, Agents: []string{"reviewer.md"}},
+		}},
+	} {
+		if err := Validate(catalog); err == nil {
+			t.Errorf("Validate(%#v) error = nil", catalog)
+		}
+	}
+}

@@ -26,9 +26,10 @@ type Catalog struct {
 }
 
 type Skill struct {
-	Name   string `toml:"name"`
-	Source string `toml:"source"`
-	Digest string `toml:"digest"`
+	Name   string   `toml:"name"`
+	Source string   `toml:"source"`
+	Digest string   `toml:"digest"`
+	Agents []string `toml:"agents,omitempty"`
 }
 
 func Load(path string) (Catalog, error) {
@@ -55,6 +56,10 @@ func Save(path string, catalog Catalog) error {
 		return err
 	}
 	catalog.Skills = append([]Skill(nil), catalog.Skills...)
+	for index := range catalog.Skills {
+		catalog.Skills[index].Agents = append([]string(nil), catalog.Skills[index].Agents...)
+		sort.Strings(catalog.Skills[index].Agents)
+	}
 	sort.Slice(catalog.Skills, func(i, j int) bool {
 		return catalog.Skills[i].Name < catalog.Skills[j].Name
 	})
@@ -67,6 +72,7 @@ func Save(path string, catalog Catalog) error {
 
 func Validate(catalog Catalog) error {
 	seen := make(map[string]struct{}, len(catalog.Skills))
+	ownedAgents := make(map[string]string)
 	for _, skill := range catalog.Skills {
 		if err := validateName(skill.Name); err != nil {
 			return err
@@ -83,7 +89,27 @@ func Validate(catalog Catalog) error {
 		if _, exists := seen[skill.Name]; exists {
 			return fmt.Errorf("skill %q is duplicated", skill.Name)
 		}
+		for _, agent := range skill.Agents {
+			if err := validateAgentPath(agent); err != nil {
+				return fmt.Errorf("skill %q: %w", skill.Name, err)
+			}
+			if owner, exists := ownedAgents[agent]; exists {
+				return fmt.Errorf("agent %q is owned by both skill %q and skill %q", agent, owner, skill.Name)
+			}
+			ownedAgents[agent] = skill.Name
+		}
 		seen[skill.Name] = struct{}{}
+	}
+	return nil
+}
+
+func validateAgentPath(relative string) error {
+	path := filepath.FromSlash(relative)
+	clean := filepath.Clean(path)
+	if relative == "" || filepath.IsAbs(path) || clean == "." || clean == ".." ||
+		strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.ToSlash(clean) != relative ||
+		strings.Contains(relative, `\`) || !strings.EqualFold(filepath.Ext(relative), ".md") {
+		return fmt.Errorf("invalid companion agent path %q", relative)
 	}
 	return nil
 }
