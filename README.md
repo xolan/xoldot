@@ -257,5 +257,5 @@ Available tasks are:
 | `mise run check` | Run formatting, lint, tests, and build gates |
 
 The GitHub Actions CI pipeline runs formatting, Go lint, and workflow lint in
-parallel. Linux and macOS tests start after those checks pass, followed by
-parallel platform builds and uploaded artifacts.
+parallel. Linux tests start after those checks pass, followed by parallel Linux
+and macOS builds with uploaded artifacts.
