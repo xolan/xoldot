@@ -1,9 +1,12 @@
 package skills
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -38,13 +41,20 @@ func Load(path string) (Catalog, error) {
 	}
 
 	var catalog Catalog
-	if err := toml.Unmarshal(data, &catalog); err != nil {
+	if err := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields().Decode(&catalog); err != nil {
 		return Catalog{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if err := Validate(catalog); err != nil {
+		return Catalog{}, fmt.Errorf("validate %s: %w", path, err)
 	}
 	return catalog, nil
 }
 
 func Save(path string, catalog Catalog) error {
+	if err := Validate(catalog); err != nil {
+		return err
+	}
+	catalog.Skills = append([]Skill(nil), catalog.Skills...)
 	sort.Slice(catalog.Skills, func(i, j int) bool {
 		return catalog.Skills[i].Name < catalog.Skills[j].Name
 	})
@@ -53,6 +63,71 @@ func Save(path string, catalog Catalog) error {
 		return fmt.Errorf("encode skills: %w", err)
 	}
 	return config.WriteFile(path, data, 0o644)
+}
+
+func Validate(catalog Catalog) error {
+	seen := make(map[string]struct{}, len(catalog.Skills))
+	for _, skill := range catalog.Skills {
+		if err := validateName(skill.Name); err != nil {
+			return err
+		}
+		if strings.TrimSpace(skill.Source) == "" {
+			return fmt.Errorf("skill %q has an empty source", skill.Name)
+		}
+		if _, err := NormalizeSource(skill.Source, ""); err != nil {
+			return fmt.Errorf("skill %q: %w", skill.Name, err)
+		}
+		if !validDigest(skill.Digest) {
+			return fmt.Errorf("skill %q has an invalid digest", skill.Name)
+		}
+		if _, exists := seen[skill.Name]; exists {
+			return fmt.Errorf("skill %q is duplicated", skill.Name)
+		}
+		seen[skill.Name] = struct{}{}
+	}
+	return nil
+}
+
+func NormalizeSource(source, baseDirectory string) (string, error) {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return "", fmt.Errorf("skill source cannot be empty")
+	}
+	parsed, err := url.Parse(source)
+	if err != nil {
+		return "", fmt.Errorf("parse skill source: %w", err)
+	}
+	if parsed.Scheme != "" {
+		scheme := strings.ToLower(parsed.Scheme)
+		httpSource := scheme == "http" || scheme == "https" || strings.HasSuffix(scheme, "+http") || strings.HasSuffix(scheme, "+https")
+		if parsed.User != nil || (httpSource && parsed.RawQuery != "") {
+			return "", fmt.Errorf("skill source URL must not contain credentials; use a Git credential helper")
+		}
+		return source, nil
+	}
+	if filepath.IsAbs(source) {
+		return filepath.Clean(source), nil
+	}
+	if strings.HasPrefix(source, "."+string(filepath.Separator)) || strings.HasPrefix(source, ".."+string(filepath.Separator)) {
+		if baseDirectory == "" {
+			return "", fmt.Errorf("relative skill source %q requires a base directory", source)
+		}
+		return filepath.Abs(filepath.Join(baseDirectory, source))
+	}
+	return source, nil
+}
+
+func validDigest(digest string) bool {
+	const prefix = "sha256:"
+	if !strings.HasPrefix(digest, prefix) || len(digest) != len(prefix)+64 {
+		return false
+	}
+	for _, character := range strings.TrimPrefix(digest, prefix) {
+		if !strings.ContainsRune("0123456789abcdef", character) {
+			return false
+		}
+	}
+	return true
 }
 
 func ParseAddArguments(arguments []string) (string, string, error) {

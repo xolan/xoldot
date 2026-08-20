@@ -1,6 +1,11 @@
 package skills
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestParseAddArguments(t *testing.T) {
 	tests := []struct {
@@ -52,5 +57,49 @@ func TestParseAddArgumentsRejectsAmbiguousOrUnsafeInput(t *testing.T) {
 		if _, _, err := ParseAddArguments(arguments); err == nil {
 			t.Errorf("ParseAddArguments(%q) error = nil", arguments)
 		}
+	}
+}
+
+func TestNormalizeSourceResolvesRelativePaths(t *testing.T) {
+	base := t.TempDir()
+	got, err := NormalizeSource("./skills/example", base)
+	if err != nil {
+		t.Fatalf("NormalizeSource() error = %v", err)
+	}
+	want := filepath.Join(base, "skills", "example")
+	if got != want {
+		t.Errorf("NormalizeSource() = %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeSourceRejectsCredentialBearingURL(t *testing.T) {
+	for _, source := range []string{
+		"https://token@github.com/owner/repo",
+		"https://github.com/owner/repo?token=secret",
+		"git+https://token@github.com/owner/repo",
+	} {
+		if _, err := NormalizeSource(source, t.TempDir()); err == nil || !strings.Contains(err.Error(), "credentials") {
+			t.Errorf("NormalizeSource(%q) error = %v", source, err)
+		}
+	}
+}
+
+func TestLoadRejectsDuplicateSkills(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "skills.toml")
+	data := `[[skill]]
+name = "example"
+source = "https://github.com/owner/one"
+digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[[skill]]
+name = "example"
+source = "https://github.com/owner/two"
+digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "duplicated") {
+		t.Fatalf("Load() error = %v, want duplicate error", err)
 	}
 }

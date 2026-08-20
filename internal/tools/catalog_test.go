@@ -96,7 +96,69 @@ func TestApplyDryReportsInsteadOfInstalling(t *testing.T) {
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("dry run created the install marker")
 	}
-	if !strings.Contains(output.String(), "would run: touch") {
+	if !strings.Contains(output.String(), "if missing, would run: touch") {
 		t.Errorf("output = %q", output.String())
+	}
+}
+
+func TestApplyDryDoesNotRunCheck(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "checked")
+	catalog := Catalog{Tools: []Tool{{
+		Name:  "example",
+		Check: "touch " + shellWord(marker) + "; false",
+		Install: Install{Linux: map[string]string{
+			"default": "true",
+		}},
+	}}}
+	var output bytes.Buffer
+
+	if err := Apply(catalog, Platform{OS: "linux", Shell: "/bin/sh"}, strings.NewReader(""), &output, &output, true); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("dry run executed check, Stat() error = %v", err)
+	}
+	if !strings.Contains(output.String(), "would check") {
+		t.Errorf("output = %q", output.String())
+	}
+}
+
+func TestLoadRejectsDuplicateTools(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tools.toml")
+	data := `[[tool]]
+name = "example"
+check = "true"
+
+[[tool]]
+name = "example"
+check = "true"
+`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "duplicated") {
+		t.Fatalf("Load() error = %v, want duplicate error", err)
+	}
+}
+
+func TestApplyValidatesEveryInstallBeforeRunningOne(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "installed")
+	catalog := Catalog{Tools: []Tool{
+		{
+			Name:  "first",
+			Check: "false",
+			Install: Install{Linux: map[string]string{
+				"default": "touch " + shellWord(marker),
+			}},
+		},
+		{Name: "second", Check: "false"},
+	}}
+	var output bytes.Buffer
+	err := Apply(catalog, Platform{OS: "linux", Shell: "/bin/sh"}, strings.NewReader(""), &output, &output, false)
+	if err == nil || !strings.Contains(err.Error(), "second") {
+		t.Fatalf("Apply() error = %v, want second tool validation error", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Errorf("first install ran before full validation: %v", err)
 	}
 }

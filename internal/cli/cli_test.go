@@ -111,6 +111,42 @@ func TestApplyValidatesShellBeforeLinking(t *testing.T) {
 	}
 }
 
+func TestApplyRefusesUnownedAliasOutputBeforeLinking(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	paths := config.NewPaths(root)
+	if err := config.Initialize(paths); err != nil {
+		t.Fatal(err)
+	}
+	managedFile := filepath.Join(paths.ManagedHome, ".example")
+	if err := os.WriteFile(managedFile, []byte("managed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	aliasDirectory := filepath.Join(home, ".aliases")
+	if err := os.MkdirAll(aliasDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aliasPath := filepath.Join(aliasDirectory, "alias.bash")
+	if err := os.WriteFile(aliasPath, []byte("alias precious='keep-me'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.TargetHomeEnv, home)
+	t.Setenv("XOLDOT_SHELL", "bash")
+
+	var output bytes.Buffer
+	err := Run([]string{"--config-dir", root, "apply"}, bytes.NewReader(nil), &output, &output, "test")
+	if err == nil || !strings.Contains(err.Error(), "not managed") {
+		t.Fatalf("apply error = %v, want alias ownership error", err)
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".example")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("dotfile was linked before alias preflight: %v", err)
+	}
+	data, err := os.ReadFile(aliasPath)
+	if err != nil || string(data) != "alias precious='keep-me'\n" {
+		t.Errorf("alias output changed: %q, %v", data, err)
+	}
+}
+
 func TestSetupDoesNotMislabelRemoteFailureAsLocalConflict(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
@@ -200,11 +236,13 @@ func TestToolListPrintsCatalogNamesInAlphabeticalOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	tools := `[[tool]]
-name = "ripgrep"
+	name = "ripgrep"
+	check = "command -v rg"
 
-[[tool]]
-name = "jq"
-`
+	[[tool]]
+	name = "jq"
+	check = "command -v jq"
+	`
 	if err := os.WriteFile(paths.Tools, []byte(tools), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -231,13 +269,15 @@ func TestSkillsListPrintsCatalogNamesInAlphabeticalOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	skills := `[[skill]]
-name = "write-tests"
-source = "https://example.com/write-tests"
+	name = "write-tests"
+	source = "https://example.com/write-tests"
+	digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-[[skill]]
-name = "code-review"
-source = "https://example.com/code-review"
-`
+	[[skill]]
+	name = "code-review"
+	source = "https://example.com/code-review"
+	digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	`
 	if err := os.WriteFile(paths.Skills, []byte(skills), 0o644); err != nil {
 		t.Fatal(err)
 	}

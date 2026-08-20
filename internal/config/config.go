@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -27,8 +28,8 @@ type Paths struct {
 }
 
 type Config struct {
-	Git     []GitConfig         `toml:"git"`
-	Aliases []AliasOutputConfig `toml:"aliases"`
+	Git     GitConfig         `toml:"git"`
+	Aliases AliasOutputConfig `toml:"aliases"`
 }
 
 type GitConfig struct {
@@ -44,15 +45,15 @@ type AliasOutputConfig struct {
 
 func Default() Config {
 	return Config{
-		Git: []GitConfig{{
+		Git: GitConfig{
 			Enabled: false,
 			Remote:  "origin",
 			Branch:  "main",
-		}},
-		Aliases: []AliasOutputConfig{{
+		},
+		Aliases: AliasOutputConfig{
 			Dir:    "~/.aliases",
 			Shells: []string{"bash", "zsh", "fish"},
-		}},
+		},
 	}
 }
 
@@ -131,8 +132,8 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("read %s: %w", path, err)
 	}
 
-	var cfg Config
-	if err := toml.Unmarshal(data, &cfg); err != nil {
+	cfg, err := decode(data)
+	if err != nil {
 		return Config{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 	cfg.setDefaults()
@@ -150,34 +151,66 @@ func Save(path string, cfg Config) error {
 
 func (cfg *Config) GitSettings() *GitConfig {
 	cfg.setDefaults()
-	return &cfg.Git[0]
+	return &cfg.Git
 }
 
 func (cfg *Config) AliasSettings() *AliasOutputConfig {
 	cfg.setDefaults()
-	return &cfg.Aliases[0]
+	return &cfg.Aliases
 }
 
 func (cfg *Config) setDefaults() {
 	defaults := Default()
-	if len(cfg.Git) == 0 {
-		cfg.Git = defaults.Git
+	if cfg.Git.Remote == "" {
+		cfg.Git.Remote = defaults.Git.Remote
 	}
-	if cfg.Git[0].Remote == "" {
-		cfg.Git[0].Remote = defaults.Git[0].Remote
+	if cfg.Git.Branch == "" {
+		cfg.Git.Branch = defaults.Git.Branch
 	}
-	if cfg.Git[0].Branch == "" {
-		cfg.Git[0].Branch = defaults.Git[0].Branch
+	if cfg.Aliases.Dir == "" {
+		cfg.Aliases.Dir = defaults.Aliases.Dir
 	}
-	if len(cfg.Aliases) == 0 {
-		cfg.Aliases = defaults.Aliases
+	if len(cfg.Aliases.Shells) == 0 {
+		cfg.Aliases.Shells = defaults.Aliases.Shells
 	}
-	if cfg.Aliases[0].Dir == "" {
-		cfg.Aliases[0].Dir = defaults.Aliases[0].Dir
+}
+
+func decode(data []byte) (Config, error) {
+	var document map[string]any
+	if err := toml.Unmarshal(data, &document); err != nil {
+		return Config{}, err
 	}
-	if len(cfg.Aliases[0].Shells) == 0 {
-		cfg.Aliases[0].Shells = defaults.Aliases[0].Shells
+	for _, section := range []string{"git", "aliases"} {
+		if err := normalizeSingleton(document, section); err != nil {
+			return Config{}, err
+		}
 	}
+	normalized, err := toml.Marshal(document)
+	if err != nil {
+		return Config{}, err
+	}
+	var cfg Config
+	return cfg, toml.Unmarshal(normalized, &cfg)
+}
+
+func normalizeSingleton(document map[string]any, section string) error {
+	value, exists := document[section]
+	if !exists || value == nil {
+		return nil
+	}
+	array := reflect.ValueOf(value)
+	if array.Kind() != reflect.Slice {
+		return nil
+	}
+	if array.Len() > 1 {
+		return fmt.Errorf("multiple %s settings are not supported", section)
+	}
+	if array.Len() == 0 {
+		delete(document, section)
+		return nil
+	}
+	document[section] = array.Index(0).Interface()
+	return nil
 }
 
 func ExpandHome(path, home string) (string, error) {

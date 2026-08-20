@@ -67,11 +67,11 @@ func TestManagerAddInstallsGlobalSkillAndClaudeFileMirror(t *testing.T) {
 		t.Errorf("arguments = %q, want %q", command.Arguments, wantArguments)
 	}
 	home, _ := environmentValue(command.Environment, "HOME")
-	if home != manager.ManagedHome {
-		t.Errorf("HOME = %q, want %q", home, manager.ManagedHome)
+	if home == manager.ManagedHome || filepath.Dir(filepath.Dir(home)) != filepath.Dir(manager.ManagedHome) {
+		t.Errorf("HOME = %q, want an isolated staging home next to %q", home, manager.ManagedHome)
 	}
 	stateHome, _ := environmentValue(command.Environment, "XDG_STATE_HOME")
-	if stateHome != filepath.Join(manager.ManagedHome, ".local", "state") {
+	if stateHome != filepath.Join(home, ".local", "state") {
 		t.Errorf("XDG_STATE_HOME = %q", stateHome)
 	}
 
@@ -161,8 +161,8 @@ func TestManagerAddRollsBackInvalidInstall(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "SKILL.md") {
 		t.Fatalf("Add() error = %v, want invalid skill error", err)
 	}
-	if len(runner.commands) != 2 {
-		t.Fatalf("commands = %d, want add and rollback remove", len(runner.commands))
+	if len(runner.commands) != 1 {
+		t.Fatalf("commands = %d, want one staged add", len(runner.commands))
 	}
 	for _, path := range []string{
 		filepath.Join(manager.ManagedHome, ".agents", "skills", "unslop"),
@@ -275,6 +275,26 @@ func TestManagerUpdateRestoresSkillWhenNpxFails(t *testing.T) {
 	}
 }
 
+func TestManagerUpdateValidatesCandidateBeforeReplacingLiveSkill(t *testing.T) {
+	manager, _, _ := testManager(t, []map[string]string{
+		{"SKILL.md": "old"},
+		{"README.md": "invalid"},
+	})
+	if err := manager.Add("unslop", "https://github.com/poteto/noodle"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := manager.Update("unslop")
+	if err == nil || !strings.Contains(err.Error(), "SKILL.md") {
+		t.Fatalf("Update() error = %v, want candidate validation error", err)
+	}
+	path := filepath.Join(manager.ManagedHome, ".agents", "skills", "unslop", "SKILL.md")
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "old" {
+		t.Errorf("live skill changed before candidate validation: %q, %v", data, err)
+	}
+}
+
 func TestManagerRemoveUsesTrackedOwnership(t *testing.T) {
 	manager, runner, _ := testManager(t, []map[string]string{{"SKILL.md": "managed"}})
 	if err := manager.Add("unslop", "https://github.com/poteto/noodle"); err != nil {
@@ -284,13 +304,8 @@ func TestManagerRemoveUsesTrackedOwnership(t *testing.T) {
 	if err := manager.Remove("unslop"); err != nil {
 		t.Fatalf("Remove() error = %v", err)
 	}
-	if len(runner.commands) != 2 {
-		t.Fatalf("commands = %d, want 2", len(runner.commands))
-	}
-	wantTail := []string{"--global", "--agent", "codex", "claude-code", "--yes"}
-	arguments := runner.commands[1].Arguments
-	if !slices.Equal(arguments[len(arguments)-len(wantTail):], wantTail) {
-		t.Errorf("remove arguments = %q", arguments)
+	if len(runner.commands) != 1 {
+		t.Fatalf("commands = %d, want only the initial staged add", len(runner.commands))
 	}
 	for _, path := range []string{
 		filepath.Join(manager.ManagedHome, ".agents", "skills", "unslop"),
@@ -306,6 +321,25 @@ func TestManagerRemoveUsesTrackedOwnership(t *testing.T) {
 	}
 	if len(catalog.Skills) != 0 {
 		t.Errorf("catalog = %#v, want empty", catalog)
+	}
+}
+
+func TestManagerAddResolvesRelativeSourceFromCallerDirectory(t *testing.T) {
+	manager, runner, root := testManager(t, []map[string]string{{"SKILL.md": "managed"}})
+	manager.SourceDirectory = filepath.Join(root, "project")
+	if err := manager.Add("unslop", "./skills/unslop"); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	want := filepath.Join(manager.SourceDirectory, "skills", "unslop")
+	if got := runner.commands[0].Arguments[3]; got != want {
+		t.Errorf("source argument = %q, want %q", got, want)
+	}
+	catalog, err := Load(manager.CatalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := catalog.Skills[0].Source; got != want {
+		t.Errorf("catalog source = %q, want %q", got, want)
 	}
 }
 

@@ -87,6 +87,13 @@ func TestCommandLeavesStdinNil(t *testing.T) {
 	}
 }
 
+func TestFormatCommandRedactsRemoteCredentials(t *testing.T) {
+	got := formatCommand([]string{"remote", "add", "origin", "https://token@github.com/owner/repo?access_token=secret"})
+	if strings.Contains(got, "token") || strings.Contains(got, "secret") {
+		t.Errorf("formatCommand() leaked credentials: %q", got)
+	}
+}
+
 func runGit(t *testing.T, directory string, arguments ...string) string {
 	t.Helper()
 	command := exec.Command("git", arguments...)

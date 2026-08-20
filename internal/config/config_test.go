@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -64,5 +65,59 @@ func TestExpandHome(t *testing.T) {
 	want := filepath.Join(home, ".aliases")
 	if got != want {
 		t.Errorf("ExpandHome() = %q, want %q", got, want)
+	}
+}
+
+func TestLoadMigratesLegacySingletonArrays(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "xoldot.toml")
+	legacy := `[[git]]
+enabled = true
+remote = "upstream"
+branch = "trunk"
+
+[[aliases]]
+dir = "~/shell-aliases"
+shells = ["zsh"]
+`
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.GitSettings(); !got.Enabled || got.Remote != "upstream" || got.Branch != "trunk" {
+		t.Errorf("git settings = %#v", got)
+	}
+	if got := cfg.AliasSettings(); got.Dir != "~/shell-aliases" || len(got.Shells) != 1 || got.Shells[0] != "zsh" {
+		t.Errorf("alias settings = %#v", got)
+	}
+
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "[[git]]") || !strings.Contains(string(data), "[git]") {
+		t.Errorf("saved config did not use singleton tables:\n%s", data)
+	}
+}
+
+func TestLoadRejectsMultipleLegacySingletons(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "xoldot.toml")
+	data := `[[git]]
+enabled = false
+
+[[git]]
+enabled = true
+`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "multiple git") {
+		t.Fatalf("Load() error = %v, want multiple git error", err)
 	}
 }

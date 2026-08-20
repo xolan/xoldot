@@ -54,3 +54,105 @@ func TestAddRejectsUnsafeName(t *testing.T) {
 		t.Fatal("Add() error = nil, want invalid name error")
 	}
 }
+
+func TestPrepareRefusesUnownedOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "alias.bash")
+	if err := os.WriteFile(path, []byte("alias precious='keep-me'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Prepare(path, "bash", nil); err == nil || !strings.Contains(err.Error(), "not managed") {
+		t.Fatalf("Prepare() error = %v, want ownership error", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "alias precious='keep-me'\n" {
+		t.Errorf("unowned output changed: %q", data)
+	}
+}
+
+func TestPrepareRefusesEditedGeneratedOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "alias.bash")
+	plan, err := Prepare(path, "bash", []Alias{{Name: "ll", Command: "ls -l"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("alias local='keep-me'\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Prepare(path, "bash", []Alias{{Name: "ll", Command: "ls -la"}}); err == nil || !strings.Contains(err.Error(), "local changes") {
+		t.Fatalf("Prepare() error = %v, want local changes error", err)
+	}
+}
+
+func TestPlanApplyRechecksOwnership(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "alias.bash")
+	plan, err := Prepare(path, "bash", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("user data\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err == nil || !strings.Contains(err.Error(), "not managed") {
+		t.Fatalf("Apply() error = %v, want ownership error", err)
+	}
+}
+
+func TestLoadRejectsDuplicateAliases(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "aliases.toml")
+	data := `[[alias]]
+name = "ll"
+command = "ls -l"
+
+[[alias]]
+name = "ll"
+command = "ls -la"
+`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "duplicated") {
+		t.Fatalf("Load() error = %v, want duplicate error", err)
+	}
+}
+
+func TestPlanCurrentDoesNotRewrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "alias.bash")
+	plan, err := Prepare(path, "bash", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err = Prepare(path, "bash", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Error("Apply() replaced an already-current output")
+	}
+}

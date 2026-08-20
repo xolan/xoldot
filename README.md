@@ -4,41 +4,7 @@
 into your home directory. Its state lives in `~/.config/xoldot` by default and
 can be synchronized through a Git remote.
 
-## Development
-
-[mise](https://mise.jdx.dev/) owns the Go and lint tool versions as well as all
-development commands:
-
-```sh
-mise trust
-mise install
-mise run check
-mise run install
-```
-
-Do not invoke `go`, `gofmt`, or `golangci-lint` directly in this repository.
-Available tasks are:
-
-| Task | Purpose |
-| --- | --- |
-| `mise run tidy` | Update module metadata |
-| `mise run fmt` | Format Go code |
-| `mise run fmt-check` | Verify formatting without changing files |
-| `mise run lint` | Run golangci-lint |
-| `mise run actions-lint` | Validate GitHub Actions workflows |
-| `mise run test` | Run tests |
-| `mise run build` | Build `dist/xoldot` |
-| `mise run run -- <args>` | Run xoldot from source |
-| `mise run package` | Build `dist/xoldot-$VERSION` |
-| `mise run archive` | Package the versioned binary as a tar archive |
-| `mise run install` | Install through `go install` |
-| `mise run check` | Run formatting, lint, tests, and build gates |
-
-The GitHub Actions CI pipeline runs formatting, Go lint, and workflow lint in
-parallel. Linux and macOS tests start after those checks pass, followed by
-parallel platform builds and uploaded artifacts.
-
-## Getting started
+## Usage
 
 Run the interactive setup:
 
@@ -70,12 +36,12 @@ already installed.
 The top-level defaults are:
 
 ```toml
-[[git]]
+[git]
 enabled = false
 remote = "origin"
 branch = "main"
 
-[[aliases]]
+[aliases]
 dir = "~/.aliases"
 shells = ["bash", "zsh", "fish"]
 ```
@@ -83,7 +49,7 @@ shells = ["bash", "zsh", "fish"]
 For testing or unusual layouts, `--config-dir DIR` overrides the configuration
 directory. `XOLDOT_CONFIG_HOME` provides the equivalent environment override.
 
-## Tools
+### Tools
 
 Add a tool, then fill in its install commands in `tools.toml`:
 
@@ -127,7 +93,7 @@ xoldot tool list
 xoldot tools list # "tools" is an alias
 ```
 
-## Agent skills
+### Agent skills
 
 Skill commands manage global, home-folder agent skills. The shorthand form
 assumes a GitHub repository:
@@ -144,6 +110,11 @@ xoldot skill update unslop       # update one skill
 xoldot skills update             # update all; "skills" is an alias
 xoldot skill remove unslop
 ```
+
+Relative filesystem sources are resolved from the directory where the command
+is run before they are saved. URLs containing embedded credentials or query
+parameters are rejected; configure authentication through a Git credential
+helper instead.
 
 List cataloged skills, one name per line:
 
@@ -166,7 +137,7 @@ directory is linked into both `~/.agents/skills/<skill>` and
 `~/.claude/skills/<skill>`. Run apply after an add, update, or removal to
 reconcile those directory links in your real home directory.
 
-## Aliases
+### Aliases
 
 Add or update an alias with:
 
@@ -194,7 +165,11 @@ source ~/.aliases/alias.bash
 
 `XOLDOT_SHELL=bash|zsh|fish` can override detection when needed.
 
-## Managed home files
+Generated alias files contain an ownership digest. Apply refuses to overwrite
+an existing unowned file or a generated file with local edits. Move or rename
+such a file before applying if xoldot should replace it.
+
+### Managed home files
 
 Every file below `files/home` maps to the same relative path below the current
 user's home. For example:
@@ -228,7 +203,7 @@ symlinks are left untouched.
 
 `XOLDOT_TARGET_HOME` overrides the destination home for isolated testing.
 
-## Sync
+### Sync
 
 ```sh
 xoldot sync
@@ -239,13 +214,48 @@ changes exist, pulls the configured branch with rebase when it already exists
 on the remote, and pushes the result. Git's normal `user.name`, `user.email`,
 and remote authentication configuration are used.
 
-`xoldot apply --dry` and `xoldot sync --dry` preview every action (tool
-installs, dotfile links and removals, commits, pulls, and pushes) without
-changing anything.
+`xoldot apply --dry` and `xoldot sync --dry` preview every action (tool checks
+and installs, dotfile links and removals, commits, pulls, and pushes) without
+changing anything. Dry apply does not execute tool checks because checks are
+arbitrary user-authored commands.
 
-## Current scope
+### Current scope
 
 The `profiles/` directory is reserved for profile inheritance, but profiles are
 not interpreted in this first release. Conflict backup/force modes and shells
 other than Bash, Zsh, and Fish are also intentionally outside the current
 scope.
+
+## Development
+
+[mise](https://mise.jdx.dev/) owns the Go and lint tool versions as well as all
+development commands:
+
+```sh
+mise trust
+mise install
+mise run check
+mise run install
+```
+
+Do not invoke `go`, `gofmt`, or `golangci-lint` directly in this repository.
+Available tasks are:
+
+| Task | Purpose |
+| --- | --- |
+| `mise run tidy` | Update module metadata |
+| `mise run fmt` | Format Go code |
+| `mise run fmt-check` | Verify formatting without changing files |
+| `mise run lint` | Run golangci-lint |
+| `mise run actions-lint` | Validate GitHub Actions workflows |
+| `mise run test` | Run tests |
+| `mise run build` | Build `dist/xoldot` |
+| `mise run run -- <args>` | Run xoldot from source |
+| `mise run package` | Build `dist/xoldot-$VERSION` |
+| `mise run archive` | Package the versioned binary as a tar archive |
+| `mise run install` | Install through `go install` |
+| `mise run check` | Run formatting, lint, tests, and build gates |
+
+The GitHub Actions CI pipeline runs formatting, Go lint, and workflow lint in
+parallel. Linux and macOS tests start after those checks pass, followed by
+parallel platform builds and uploaded artifacts.

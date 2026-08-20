@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/xolan/xoldot/internal/pathutil"
+	"github.com/xolan/xoldot/internal/urlutil"
 )
 
 const npmPackage = "skills@1.5.23"
@@ -45,23 +46,28 @@ func (ExecRunner) Run(request Command) error {
 		if errors.Is(err, exec.ErrNotFound) {
 			return fmt.Errorf("npx is required; install Node.js 22.20 or newer: %w", err)
 		}
-		return fmt.Errorf("npx %s: %w", strings.Join(request.Arguments, " "), err)
+		return fmt.Errorf("npx %s: %w", formatCommand(request.Arguments), err)
 	}
 	return nil
 }
 
 type Manager struct {
-	CatalogPath string
-	ManagedHome string
-	Stdin       io.Reader
-	Stdout      io.Writer
-	Stderr      io.Writer
-	Verbose     bool
-	Runner      Runner
+	CatalogPath     string
+	ManagedHome     string
+	SourceDirectory string
+	Stdin           io.Reader
+	Stdout          io.Writer
+	Stderr          io.Writer
+	Verbose         bool
+	Runner          Runner
 }
 
 func (manager Manager) Add(name, source string) error {
 	if err := validateName(name); err != nil {
+		return err
+	}
+	source, err := NormalizeSource(source, manager.sourceDirectory())
+	if err != nil {
 		return err
 	}
 	catalog, err := Load(manager.CatalogPath)
@@ -88,19 +94,15 @@ func (manager Manager) Add(name, source string) error {
 		return fmt.Errorf("inspect Claude compatibility path %s: %w", compatibility, err)
 	}
 
-	if err := manager.runAdd(name, source); err != nil {
-		return errors.Join(err, cleanupAddPaths(canonical, compatibility))
-	}
-	digest, err := digestSkill(canonical)
+	candidate, err := manager.stageSkill(name, source)
 	if err != nil {
-		return errors.Join(err, manager.rollbackAdd(name, canonical, compatibility))
+		return err
 	}
-	catalog.Skills = append(catalog.Skills, Skill{Name: name, Source: source, Digest: digest})
-	if err := replaceCompatibilityMirror(canonical, compatibility, manager.ManagedHome); err != nil {
-		return errors.Join(err, manager.rollbackAdd(name, canonical, compatibility))
-	}
-	if err := Save(manager.CatalogPath, catalog); err != nil {
-		return errors.Join(err, manager.rollbackAdd(name, canonical, compatibility))
+	catalog.Skills = append(catalog.Skills, Skill{Name: name, Source: source, Digest: candidate.digest})
+	if err := replaceSkill(candidate, canonical, compatibility, manager.ManagedHome, false, func() error {
+		return Save(manager.CatalogPath, catalog)
+	}); err != nil {
+		return err
 	}
 	return writeStatus(manager.Stdout, "Added skill %s from %s\n", name, source)
 }
@@ -127,22 +129,10 @@ func (manager Manager) Remove(name string) error {
 		return err
 	}
 
-	backup, err := moveToBackup(canonical, manager.ManagedHome)
-	if err != nil {
-		return err
-	}
-	if err := manager.runRemove(name); err != nil {
-		return errors.Join(err, restoreSkill(backup, canonical, compatibility, manager.ManagedHome))
-	}
-	if err := removeCompatibilityMirror(compatibility); err != nil {
-		return errors.Join(err, restoreSkill(backup, canonical, compatibility, manager.ManagedHome))
-	}
-
 	catalog.Skills = append(catalog.Skills[:index], catalog.Skills[index+1:]...)
-	if err := Save(manager.CatalogPath, catalog); err != nil {
-		return errors.Join(err, restoreSkill(backup, canonical, compatibility, manager.ManagedHome))
-	}
-	if err := backup.discard(); err != nil {
+	if err := removeSkill(canonical, compatibility, manager.ManagedHome, func() error {
+		return Save(manager.CatalogPath, catalog)
+	}); err != nil {
 		return err
 	}
 	return writeStatus(manager.Stdout, "Removed skill %s\n", name)
@@ -184,25 +174,18 @@ func (manager Manager) Update(name string) error {
 			return err
 		}
 
-		backup, err := moveToBackup(canonical, manager.ManagedHome)
+		candidate, err := manager.stageSkill(skill.Name, skill.Source)
 		if err != nil {
 			return err
 		}
-		if err := manager.runAdd(skill.Name, skill.Source); err != nil {
-			return errors.Join(err, restoreSkill(backup, canonical, compatibility, manager.ManagedHome))
+		if err := verifyOwnedSkill(skill, canonical, compatibility); err != nil {
+			candidate.cleanup()
+			return err
 		}
-		digest, err := digestSkill(canonical)
-		if err != nil {
-			return errors.Join(err, restoreSkill(backup, canonical, compatibility, manager.ManagedHome))
-		}
-		if err := replaceCompatibilityMirror(canonical, compatibility, manager.ManagedHome); err != nil {
-			return errors.Join(err, restoreSkill(backup, canonical, compatibility, manager.ManagedHome))
-		}
-		catalog.Skills[index].Digest = digest
-		if err := Save(manager.CatalogPath, catalog); err != nil {
-			return errors.Join(err, restoreSkill(backup, canonical, compatibility, manager.ManagedHome))
-		}
-		if err := backup.discard(); err != nil {
+		catalog.Skills[index].Digest = candidate.digest
+		if err := replaceSkill(candidate, canonical, compatibility, manager.ManagedHome, true, func() error {
+			return Save(manager.CatalogPath, catalog)
+		}); err != nil {
 			return err
 		}
 		if err := writeStatus(manager.Stdout, "Updated skill %s\n", skill.Name); err != nil {
@@ -215,22 +198,15 @@ func (manager Manager) Update(name string) error {
 	return nil
 }
 
-func (manager Manager) runAdd(name, source string) error {
-	return manager.run(
+func (manager Manager) runAdd(name, source, managedHome string) error {
+	return manager.run(managedHome,
 		"--yes", npmPackage, "add", source,
 		"--skill", name, "--global", "--agent", "codex", "--yes",
 	)
 }
 
-func (manager Manager) runRemove(name string) error {
-	return manager.run(
-		"--yes", npmPackage, "remove", name,
-		"--global", "--agent", "codex", "claude-code", "--yes",
-	)
-}
-
-func (manager Manager) run(arguments ...string) error {
-	environment, err := redirectedEnvironment(manager.ManagedHome)
+func (manager Manager) run(managedHome string, arguments ...string) error {
+	environment, err := redirectedEnvironment(managedHome)
 	if err != nil {
 		return err
 	}
@@ -239,7 +215,9 @@ func (manager Manager) run(arguments ...string) error {
 		runner = ExecRunner{}
 	}
 	if manager.Verbose && manager.Stderr != nil {
-		fmt.Fprintf(manager.Stderr, "+ npx %s\n", strings.Join(arguments, " "))
+		if _, err := fmt.Fprintf(manager.Stderr, "+ npx %s\n", formatCommand(arguments)); err != nil {
+			return fmt.Errorf("write skill command: %w", err)
+		}
 	}
 	return runner.Run(Command{
 		Arguments:   arguments,
@@ -249,6 +227,28 @@ func (manager Manager) run(arguments ...string) error {
 		Stdout:      manager.Stdout,
 		Stderr:      manager.Stderr,
 	})
+}
+
+func (manager Manager) sourceDirectory() string {
+	if manager.SourceDirectory != "" {
+		return manager.SourceDirectory
+	}
+	directory, err := os.Getwd()
+	if err != nil {
+		return filepath.Dir(manager.CatalogPath)
+	}
+	return directory
+}
+
+func formatCommand(arguments []string) string {
+	formatted := append([]string(nil), arguments...)
+	for index, argument := range formatted {
+		if argument == "add" && index+1 < len(formatted) {
+			formatted[index+1] = urlutil.RedactForDisplay(formatted[index+1])
+			break
+		}
+	}
+	return strings.Join(formatted, " ")
 }
 
 func (manager Manager) canonicalPath(name string) string {
@@ -343,26 +343,6 @@ func verifyOwnedSkill(skill Skill, canonical, compatibility string) error {
 		return fmt.Errorf("skill %q has local changes; refusing to overwrite content xoldot cannot verify", skill.Name)
 	}
 	return validateCompatibilityMirror(canonical, compatibility)
-}
-
-func (manager Manager) rollbackAdd(name, canonical, compatibility string) error {
-	var rollbackErrors []error
-	if err := manager.runRemove(name); err != nil {
-		rollbackErrors = append(rollbackErrors, fmt.Errorf("roll back upstream skill state: %w", err))
-	}
-	rollbackErrors = append(rollbackErrors, cleanupAddPaths(canonical, compatibility))
-	return errors.Join(rollbackErrors...)
-}
-
-func cleanupAddPaths(canonical, compatibility string) error {
-	var rollbackErrors []error
-	if err := os.RemoveAll(canonical); err != nil {
-		rollbackErrors = append(rollbackErrors, fmt.Errorf("remove incomplete managed skill: %w", err))
-	}
-	if err := os.RemoveAll(compatibility); err != nil {
-		rollbackErrors = append(rollbackErrors, fmt.Errorf("remove incomplete Claude compatibility links: %w", err))
-	}
-	return errors.Join(rollbackErrors...)
 }
 
 func digestSkill(root string) (string, error) {
@@ -494,17 +474,11 @@ func validateCompatibilityMirror(canonical, compatibility string) error {
 	})
 }
 
-func replaceCompatibilityMirror(canonical, compatibility, managedHome string) error {
-	temporary, err := os.MkdirTemp(filepath.Dir(managedHome), ".xoldot-skill-mirror-*")
-	if err != nil {
-		return fmt.Errorf("create Claude compatibility staging directory: %w", err)
-	}
-	defer func() { _ = os.RemoveAll(temporary) }()
-	staged := filepath.Join(temporary, "skill")
-	if err := os.MkdirAll(staged, 0o755); err != nil {
+func buildCompatibilityMirror(canonical, compatibility string) error {
+	if err := os.MkdirAll(compatibility, 0o755); err != nil {
 		return err
 	}
-	err = filepath.WalkDir(canonical, func(source string, entry fs.DirEntry, walkErr error) error {
+	err := filepath.WalkDir(canonical, func(source string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -512,12 +486,11 @@ func replaceCompatibilityMirror(canonical, compatibility, managedHome string) er
 		if err != nil || relative == "." {
 			return err
 		}
-		target := filepath.Join(staged, relative)
-		finalTarget := filepath.Join(compatibility, relative)
+		target := filepath.Join(compatibility, relative)
 		if entry.IsDir() {
 			return os.MkdirAll(target, 0o755)
 		}
-		destination, err := filepath.Rel(filepath.Dir(finalTarget), source)
+		destination, err := filepath.Rel(filepath.Dir(target), source)
 		if err != nil {
 			return err
 		}
@@ -525,83 +498,6 @@ func replaceCompatibilityMirror(canonical, compatibility, managedHome string) er
 	})
 	if err != nil {
 		return fmt.Errorf("build Claude compatibility links: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(compatibility), 0o755); err != nil {
-		return err
-	}
-	backup := filepath.Join(temporary, "previous")
-	hadPrevious := false
-	if _, err := os.Lstat(compatibility); err == nil {
-		if err := os.Rename(compatibility, backup); err != nil {
-			return fmt.Errorf("stage previous Claude compatibility links: %w", err)
-		}
-		hadPrevious = true
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err := os.Rename(staged, compatibility); err != nil {
-		if hadPrevious {
-			_ = os.Rename(backup, compatibility)
-		}
-		return fmt.Errorf("install Claude compatibility links: %w", err)
-	}
-	return nil
-}
-
-func removeCompatibilityMirror(compatibility string) error {
-	if err := os.RemoveAll(compatibility); err != nil {
-		return fmt.Errorf("remove Claude compatibility links: %w", err)
-	}
-	return nil
-}
-
-type skillBackup struct {
-	directory string
-}
-
-func moveToBackup(canonical, managedHome string) (skillBackup, error) {
-	directory, err := os.MkdirTemp(filepath.Dir(managedHome), ".xoldot-skill-backup-*")
-	if err != nil {
-		return skillBackup{}, fmt.Errorf("create skill backup directory: %w", err)
-	}
-	backup := skillBackup{directory: directory}
-	if err := os.Rename(canonical, backup.path()); err != nil {
-		_ = os.RemoveAll(directory)
-		return skillBackup{}, fmt.Errorf("stage managed skill %s: %w", canonical, err)
-	}
-	return backup, nil
-}
-
-func (backup skillBackup) restore(canonical string) error {
-	if err := os.RemoveAll(canonical); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(canonical), 0o755); err != nil {
-		return err
-	}
-	if err := os.Rename(backup.path(), canonical); err != nil {
-		return err
-	}
-	return os.RemoveAll(backup.directory)
-}
-
-func (backup skillBackup) discard() error {
-	if err := os.RemoveAll(backup.directory); err != nil {
-		return fmt.Errorf("remove previous skill version: %w", err)
-	}
-	return nil
-}
-
-func (backup skillBackup) path() string {
-	return filepath.Join(backup.directory, "skill")
-}
-
-func restoreSkill(backup skillBackup, canonical, compatibility, managedHome string) error {
-	if err := backup.restore(canonical); err != nil {
-		return fmt.Errorf("restore previous skill version: %w", err)
-	}
-	if err := replaceCompatibilityMirror(canonical, compatibility, managedHome); err != nil {
-		return fmt.Errorf("restore Claude compatibility links: %w", err)
 	}
 	return nil
 }

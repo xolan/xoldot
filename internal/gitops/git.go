@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/xolan/xoldot/internal/urlutil"
 )
 
 type Runner struct {
@@ -196,7 +198,7 @@ func (runner Runner) run(arguments ...string) error {
 	command.Stdout = runner.Stdout
 	command.Stderr = runner.Stderr
 	if err := command.Run(); err != nil {
-		return fmt.Errorf("git %s: %w", strings.Join(arguments, " "), err)
+		return fmt.Errorf("git %s: %w", formatCommand(arguments), err)
 	}
 	return nil
 }
@@ -214,7 +216,7 @@ func (runner Runner) output(arguments ...string) (string, error) {
 
 func (runner Runner) command(arguments ...string) *exec.Cmd {
 	if runner.Verbose && runner.Stderr != nil {
-		fmt.Fprintf(runner.Stderr, "+ git %s\n", strings.Join(arguments, " "))
+		_, _ = fmt.Fprintf(runner.Stderr, "+ git %s\n", formatCommand(arguments))
 	}
 	// Stdin stays nil: a non-*os.File stdin makes exec.Cmd copy in a
 	// goroutine that Wait blocks on until the next terminal read returns,
@@ -222,6 +224,14 @@ func (runner Runner) command(arguments ...string) *exec.Cmd {
 	command := exec.Command("git", arguments...)
 	command.Dir = runner.Dir
 	return command
+}
+
+func formatCommand(arguments []string) string {
+	formatted := append([]string(nil), arguments...)
+	if len(formatted) == 4 && formatted[0] == "remote" && (formatted[1] == "add" || formatted[1] == "set-url") {
+		formatted[3] = urlutil.RedactForDisplay(formatted[3])
+	}
+	return strings.Join(formatted, " ")
 }
 
 func hasExitCode(err error, code int) bool {

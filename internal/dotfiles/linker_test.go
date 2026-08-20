@@ -2,6 +2,7 @@ package dotfiles
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -692,5 +693,154 @@ func TestLinkDryPlansWithoutMutating(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".local", "state", "xoldot", "links.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Error("dry run saved the link ledger")
+	}
+}
+
+type failAfterWriter struct {
+	writes int
+}
+
+func (writer *failAfterWriter) Write(data []byte) (int, error) {
+	writer.writes++
+	if writer.writes > 1 {
+		return 0, fmt.Errorf("simulated output failure")
+	}
+	return len(data), nil
+}
+
+func TestLinkRollsBackMutationsWhenExecutionFails(t *testing.T) {
+	root := t.TempDir()
+	managed := filepath.Join(root, "managed")
+	home := filepath.Join(root, "home")
+	configRoot := filepath.Join(root, "config")
+	for _, directory := range []string{managed, home, configRoot} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"one", "two"} {
+		path := filepath.Join(managed, ".config", name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := Link(managed, home, configRoot, &failAfterWriter{}, false); err == nil {
+		t.Fatal("Link() error = nil, want output failure")
+	}
+	for _, name := range []string{"one", "two"} {
+		if _, err := os.Lstat(filepath.Join(home, ".config", name)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("link %s remained after rollback: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("created target directory remained after rollback: %v", err)
+	}
+	ledger := filepath.Join(home, ".local", "state", "xoldot", "links.json")
+	if _, err := os.Stat(ledger); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("ledger was saved after rollback: %v", err)
+	}
+}
+
+func TestLinkRestoresStaleLinksWhenExecutionFails(t *testing.T) {
+	root := t.TempDir()
+	managed := filepath.Join(root, "managed")
+	home := filepath.Join(root, "home")
+	configRoot := filepath.Join(root, "config")
+	for _, directory := range []string{managed, home, configRoot} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldSource := filepath.Join(managed, "old")
+	if err := os.WriteFile(oldSource, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Link(managed, home, configRoot, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(oldSource); err != nil {
+		t.Fatal(err)
+	}
+	newSource := filepath.Join(managed, "new")
+	if err := os.WriteFile(newSource, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Link(managed, home, configRoot, &failAfterWriter{}, false); err == nil {
+		t.Fatal("Link() error = nil, want output failure")
+	}
+	oldTarget := filepath.Join(home, "old")
+	if destination, err := os.Readlink(oldTarget); err != nil {
+		t.Fatalf("stale link was not restored: %v", err)
+	} else if destination != oldSource {
+		t.Errorf("restored stale destination = %q, want %q", destination, oldSource)
+	}
+	if _, err := os.Lstat(filepath.Join(home, "new")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("new link remained after rollback: %v", err)
+	}
+}
+
+func TestLinkDryDoesNotCreateMissingHome(t *testing.T) {
+	root := t.TempDir()
+	managed := filepath.Join(root, "managed")
+	home := filepath.Join(root, "missing-home")
+	configRoot := filepath.Join(root, "config")
+	if err := os.MkdirAll(managed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(configRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(managed, ".vimrc"), []byte("managed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Link(managed, home, configRoot, io.Discard, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(home); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("dry run created home: %v", err)
+	}
+}
+
+func TestPlanRefusesChangedCurrentLinkBeforeMutating(t *testing.T) {
+	root := t.TempDir()
+	managed := filepath.Join(root, "managed")
+	home := filepath.Join(root, "home")
+	configRoot := filepath.Join(root, "config")
+	for _, directory := range []string{managed, home, configRoot} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"current", "missing"} {
+		if err := os.WriteFile(filepath.Join(managed, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	currentTarget := filepath.Join(home, "current")
+	if err := os.Symlink(filepath.Join(managed, "current"), currentTarget); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Prepare(managed, home, configRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(currentTarget); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(managed, "missing"), currentTarget); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := plan.Apply(io.Discard, false); err == nil || !strings.Contains(err.Error(), "changed while applying") {
+		t.Fatalf("Apply() error = %v, want changed-current error", err)
+	}
+	if _, err := os.Lstat(filepath.Join(home, "missing")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("planned missing link was created: %v", err)
 	}
 }

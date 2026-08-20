@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -48,13 +49,20 @@ func Load(path string) (Catalog, error) {
 	}
 
 	var catalog Catalog
-	if err := toml.Unmarshal(data, &catalog); err != nil {
+	if err := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields().Decode(&catalog); err != nil {
 		return Catalog{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if err := Validate(catalog); err != nil {
+		return Catalog{}, fmt.Errorf("validate %s: %w", path, err)
 	}
 	return catalog, nil
 }
 
 func Save(path string, catalog Catalog) error {
+	if err := Validate(catalog); err != nil {
+		return err
+	}
+	catalog.Tools = append([]Tool(nil), catalog.Tools...)
 	sort.Slice(catalog.Tools, func(i, j int) bool {
 		return catalog.Tools[i].Name < catalog.Tools[j].Name
 	})
@@ -63,6 +71,23 @@ func Save(path string, catalog Catalog) error {
 		return fmt.Errorf("encode tools: %w", err)
 	}
 	return config.WriteFile(path, data, 0o644)
+}
+
+func Validate(catalog Catalog) error {
+	seen := make(map[string]struct{}, len(catalog.Tools))
+	for _, tool := range catalog.Tools {
+		if strings.TrimSpace(tool.Name) == "" {
+			return fmt.Errorf("tool name cannot be empty")
+		}
+		if strings.TrimSpace(tool.Check) == "" {
+			return fmt.Errorf("tool %q has an empty check command", tool.Name)
+		}
+		if _, exists := seen[tool.Name]; exists {
+			return fmt.Errorf("tool %q is duplicated", tool.Name)
+		}
+		seen[tool.Name] = struct{}{}
+	}
+	return nil
 }
 
 func Add(catalog *Catalog, name string) error {
@@ -127,43 +152,71 @@ func (tool Tool) InstallCommand(platform Platform) (string, error) {
 }
 
 func Apply(catalog Catalog, platform Platform, stdin io.Reader, stdout, stderr io.Writer, dry bool) error {
+	if err := Validate(catalog); err != nil {
+		return err
+	}
 	shell := platform.Shell
 	if shell == "" {
 		shell = "/bin/sh"
 	}
+	if dry {
+		return preview(catalog, platform, stdout)
+	}
+
+	type installPlan struct {
+		tool    Tool
+		command string
+	}
+	var missing []Tool
 	for _, tool := range catalog.Tools {
-		if strings.TrimSpace(tool.Check) == "" {
-			return fmt.Errorf("tool %q has an empty check command", tool.Name)
-		}
 		if commandPasses(shell, tool.Check) {
 			if _, err := fmt.Fprintf(stdout, "tool %s: already installed\n", tool.Name); err != nil {
 				return fmt.Errorf("write tool status: %w", err)
 			}
 			continue
 		}
-
-		install, err := tool.InstallCommand(platform)
+		missing = append(missing, tool)
+	}
+	plans := make([]installPlan, 0, len(missing))
+	for _, tool := range missing {
+		command, err := tool.InstallCommand(platform)
 		if err != nil {
 			return err
 		}
-		if dry {
-			if _, err := fmt.Fprintf(stdout, "tool %s: would run: %s\n", tool.Name, install); err != nil {
-				return fmt.Errorf("write tool status: %w", err)
-			}
-			continue
-		}
-		if _, err := fmt.Fprintf(stdout, "tool %s: running install command\n", tool.Name); err != nil {
+		plans = append(plans, installPlan{tool: tool, command: command})
+	}
+	for _, plan := range plans {
+		if _, err := fmt.Fprintf(stdout, "tool %s: running install command\n", plan.tool.Name); err != nil {
 			return fmt.Errorf("write tool status: %w", err)
 		}
-		command := exec.Command(shell, "-c", install)
+		command := exec.Command(shell, "-c", plan.command)
 		command.Stdin = stdin
 		command.Stdout = stdout
 		command.Stderr = stderr
 		if err := command.Run(); err != nil {
-			return fmt.Errorf("install tool %q: %w", tool.Name, err)
+			return fmt.Errorf("install tool %q: %w", plan.tool.Name, err)
 		}
-		if !commandPasses(shell, tool.Check) {
-			return fmt.Errorf("tool %q still fails its check after installation", tool.Name)
+		if !commandPasses(shell, plan.tool.Check) {
+			return fmt.Errorf("tool %q still fails its check after installation", plan.tool.Name)
+		}
+	}
+	return nil
+}
+
+func preview(catalog Catalog, platform Platform, stdout io.Writer) error {
+	for _, tool := range catalog.Tools {
+		if _, err := fmt.Fprintf(stdout, "tool %s: would check: %s\n", tool.Name, tool.Check); err != nil {
+			return fmt.Errorf("write tool status: %w", err)
+		}
+		install, err := tool.InstallCommand(platform)
+		if err != nil {
+			if _, writeErr := fmt.Fprintf(stdout, "tool %s: if missing, %v\n", tool.Name, err); writeErr != nil {
+				return fmt.Errorf("write tool status: %w", writeErr)
+			}
+			continue
+		}
+		if _, err := fmt.Fprintf(stdout, "tool %s: if missing, would run: %s\n", tool.Name, install); err != nil {
+			return fmt.Errorf("write tool status: %w", err)
 		}
 	}
 	return nil

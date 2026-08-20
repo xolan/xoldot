@@ -420,13 +420,18 @@ func (a *app) skillManager() (agentskills.Manager, error) {
 	if _, err := config.Load(paths.Config); err != nil {
 		return agentskills.Manager{}, err
 	}
+	sourceDirectory, err := os.Getwd()
+	if err != nil {
+		return agentskills.Manager{}, fmt.Errorf("find current directory: %w", err)
+	}
 	return agentskills.Manager{
-		CatalogPath: paths.Skills,
-		ManagedHome: paths.ManagedHome,
-		Stdin:       a.input,
-		Stdout:      a.output,
-		Stderr:      a.errorOutput,
-		Verbose:     a.verbose,
+		CatalogPath:     paths.Skills,
+		ManagedHome:     paths.ManagedHome,
+		SourceDirectory: sourceDirectory,
+		Stdin:           a.input,
+		Stdout:          a.output,
+		Stderr:          a.errorOutput,
+		Verbose:         a.verbose,
 	}, nil
 }
 
@@ -479,15 +484,20 @@ func (a *app) apply(dry bool) error {
 	if err != nil {
 		return err
 	}
-	if err := aliases.Validate(file.Aliases); err != nil {
+	aliasPath := filepath.Join(aliasDir, "alias."+shell)
+	aliasPlan, err := aliases.Prepare(aliasPath, shell, file.Aliases)
+	if err != nil {
 		return err
 	}
-	aliasPath := filepath.Join(aliasDir, "alias."+shell)
+	dotfilePlan, err := dotfiles.Prepare(paths.ManagedHome, home, paths.Root)
+	if err != nil {
+		return err
+	}
 
 	if err := toolcatalog.Apply(catalog, toolcatalog.CurrentPlatform(), a.input, a.output, a.errorOutput, dry); err != nil {
 		return err
 	}
-	linked, err := dotfiles.Link(paths.ManagedHome, home, paths.Root, a.output, dry)
+	linked, err := dotfilePlan.Apply(a.output, dry)
 	if err != nil {
 		return err
 	}
@@ -501,7 +511,7 @@ func (a *app) apply(dry bool) error {
 	if err := writef(a.output, "%s\n", a.style.success(summary)); err != nil {
 		return err
 	}
-	if err := aliases.Render(aliasPath, shell, file.Aliases); err != nil {
+	if err := aliasPlan.Apply(); err != nil {
 		return err
 	}
 	return writef(a.output, "%s\n", a.style.success("aliases: rendered "+aliasPath))
