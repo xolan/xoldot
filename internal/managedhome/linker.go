@@ -310,7 +310,7 @@ func prepare(managedRoot, home, configRoot string, include PathFilter) (Plan, er
 
 		target := filepath.Join(home, relative)
 		if layout.reservedTarget(target) {
-			return fmt.Errorf("managed path %s is reserved for xoldot link state", source)
+			return fmt.Errorf("managed path %s is reserved for xoldot state", source)
 		}
 		destination := source
 		if isSymlink {

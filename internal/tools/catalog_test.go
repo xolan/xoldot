@@ -87,6 +87,39 @@ func TestApplyInstallsMissingToolAndRechecks(t *testing.T) {
 	}
 }
 
+func TestPrepareBuildsInstallPlanWithoutMutating(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "installed")
+	checked := filepath.Join(t.TempDir(), "checked")
+	catalog := Catalog{Tools: []Tool{{
+		Name:  "example",
+		Check: "touch " + shellWord(checked) + "; test -f " + shellWord(marker),
+		Install: Install{Linux: map[string]string{
+			"default": "touch " + shellWord(marker),
+		}},
+	}}}
+	var output bytes.Buffer
+	plan, err := Prepare(
+		catalog,
+		Platform{OS: "linux", LinuxIDs: []string{"debian"}, Shell: "/bin/sh"},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("Prepare installed the Tool: %v", err)
+	}
+	if _, err := os.Stat(checked); !os.IsNotExist(err) {
+		t.Fatalf("Prepare checked the Tool: %v", err)
+	}
+	if err := plan.Apply(strings.NewReader(""), &output, &output, bufferReporter(&output)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("Plan.Apply did not install the Tool: %v", err)
+	}
+}
+
 func TestApplyKeepsInstallerOutputSeparateFromStatus(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "installed")
 	catalog := Catalog{Tools: []Tool{{
@@ -207,5 +240,35 @@ func TestApplyValidatesEveryInstallBeforeRunningOne(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Errorf("first install ran before full validation: %v", err)
+	}
+}
+
+func TestApplyChecksEveryToolBeforeResolvingInstallers(t *testing.T) {
+	checked := filepath.Join(t.TempDir(), "checked")
+	catalog := Catalog{Tools: []Tool{
+		{Name: "missing", Check: "false"},
+		{
+			Name:  "installed",
+			Check: "touch " + shellWord(checked),
+		},
+	}}
+	var output bytes.Buffer
+	err := Apply(catalog, Platform{OS: "linux", Shell: "/bin/sh"}, strings.NewReader(""), &output, &output, bufferReporter(&output), false)
+	if err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("Apply() error = %v, want missing installer error", err)
+	}
+	if _, err := os.Stat(checked); err != nil {
+		t.Errorf("later tool check did not run before installer validation: %v", err)
+	}
+}
+
+func TestApplyDoesNotRequireInstallerForInstalledTool(t *testing.T) {
+	catalog := Catalog{Tools: []Tool{{Name: "installed", Check: "true"}}}
+	var output bytes.Buffer
+	if err := Apply(catalog, Platform{OS: "linux", Shell: "/bin/sh"}, strings.NewReader(""), &output, &output, bufferReporter(&output), false); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if !strings.Contains(output.String(), "already installed") {
+		t.Errorf("output = %q", output.String())
 	}
 }

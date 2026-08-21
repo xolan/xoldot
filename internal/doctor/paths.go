@@ -45,7 +45,7 @@ func inspectPaths(paths config.Paths) (resolvedPaths, []string) {
 	}
 
 	if resolved.rootOK {
-		configurationPaths := []string{paths.Config, paths.Tools, paths.Aliases, paths.Skills, paths.Profiles, paths.ManagedHome}
+		configurationPaths := []string{paths.Config, paths.Tools, paths.Aliases, paths.Skills, paths.Profiles, paths.Scripts, paths.ManagedHome}
 		for _, path := range configurationPaths {
 			candidate, pathErr := pathutil.ResolveExistingPrefix(path)
 			if pathErr != nil {

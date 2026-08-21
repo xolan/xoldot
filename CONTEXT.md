@@ -8,7 +8,8 @@ taking over unrelated user content.
 
 **Configuration**:
 The complete declaration xoldot manages for one personal command-line
-environment, including tools, aliases, skills, and managed home content.
+environment, including tools, aliases, skills, managed home content, and
+lifecycle scripts.
 _Avoid_: State, settings
 
 **Configuration directory**:
@@ -66,6 +67,15 @@ An agent definition distributed with, referenced by, and managed as part of a
 Skill. A Companion agent can belong to only one Skill in a Configuration.
 _Avoid_: Skill, Codex agent configuration
 
+**Lifecycle script**:
+A trusted executable file that runs before or after the selected Apply parts.
+Its filename chooses whether it runs every time, once after its first success,
+or when its content changes. Lifecycle scripts belong to the complete
+Configuration and are not Profile members. Stateful lifecycle scripts
+serialize eligibility, execution, and success recording across Apply
+processes.
+_Avoid_: Apply part, plugin, hook for commands other than Apply
+
 ## Operations and ownership
 
 **Setup**:
@@ -75,7 +85,10 @@ _Avoid_: Apply, bootstrap
 
 **Apply**:
 Reconciliation of a Configuration with a Machine. It reconciles every Apply
-part by default, or only the parts selected by the user.
+part by default, or only the parts selected by the user. Eligible before
+lifecycle scripts run after all selected parts prepare and before any selected
+part changes the Machine. Eligible after lifecycle scripts run only after all
+selected parts succeed.
 _Avoid_: Install, Sync
 
 **Apply part**:
@@ -86,11 +99,12 @@ _Avoid_: Component, Step
 **Status**:
 A read-only comparison of a Configuration with a Machine. Status reports
 managed home, Alias, and locally verifiable Skill state without running Tool
-checks.
+checks. It also reports eligible lifecycle scripts without executing them.
 _Avoid_: Apply, because Status does not change the Machine
 
 **Diff**:
-A read-only view of the managed home and Alias changes that Apply would make.
+A read-only view of the managed home, Alias, and lifecycle-script work that
+Apply would perform.
 _Avoid_: Status, because Diff shows planned changes rather than all inspected
 state
 

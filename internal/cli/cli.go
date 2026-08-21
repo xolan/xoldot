@@ -52,7 +52,7 @@ func Run(arguments []string, input io.Reader, output, errorOutput io.Writer, ver
 func (a *app) rootCommand(version string) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "xoldot",
-		Short:         "Manage tools, aliases, skills, and managed home content",
+		Short:         "Manage tools, aliases, skills, lifecycle scripts, and managed home content",
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,

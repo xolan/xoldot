@@ -21,7 +21,12 @@ func TestInitializeCreatesDefaultLayout(t *testing.T) {
 			t.Errorf("expected %s: %v", path, err)
 		}
 	}
-	for _, path := range []string{paths.Profiles, paths.ManagedHome} {
+	for _, path := range []string{
+		paths.Profiles,
+		filepath.Join(paths.Scripts, "before-apply"),
+		filepath.Join(paths.Scripts, "after-apply"),
+		paths.ManagedHome,
+	} {
 		info, err := os.Stat(path)
 		if err != nil || !info.IsDir() {
 			t.Errorf("expected directory %s: %v", path, err)
