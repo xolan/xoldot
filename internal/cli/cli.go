@@ -15,6 +15,7 @@ import (
 	"github.com/xolan/xoldot/internal/aliases"
 	"github.com/xolan/xoldot/internal/config"
 	"github.com/xolan/xoldot/internal/gitops"
+	"github.com/xolan/xoldot/internal/managedhome"
 	agentskills "github.com/xolan/xoldot/internal/skills"
 	"github.com/xolan/xoldot/internal/status"
 	toolcatalog "github.com/xolan/xoldot/internal/tools"
@@ -66,6 +67,7 @@ func (a *app) rootCommand(version string) *cobra.Command {
   xoldot skill update
   xoldot status
   xoldot diff
+  xoldot adopt ~/.config/git/config
   xoldot apply --dry
   xoldot sync --dry`,
 	}
@@ -195,8 +197,19 @@ func (a *app) rootCommand(version string) *cobra.Command {
 	)
 	root.AddCommand(skillCommand)
 
-	root.AddCommand(a.applyCommand())
+	var adoptDry bool
+	adoptCommand := &cobra.Command{
+		Use:   "adopt <path>",
+		Short: "Move one existing home file into managed home content",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, arguments []string) error {
+			return a.adopt(arguments[0], adoptDry)
+		},
+	}
+	adoptCommand.Flags().BoolVar(&adoptDry, "dry", false, "show what would change without changing it")
+	root.AddCommand(adoptCommand)
 
+	root.AddCommand(a.applyCommand())
 	root.AddCommand(a.statusCommand(), a.diffCommand())
 
 	var syncDry bool
@@ -470,6 +483,21 @@ func (a *app) skillList() error {
 		names[index] = skill.Name
 	}
 	return writeSortedNames(a.output, names)
+}
+
+func (a *app) adopt(source string, dry bool) error {
+	paths, err := a.paths()
+	if err != nil {
+		return err
+	}
+	if _, err := config.Load(paths.Config); err != nil {
+		return err
+	}
+	home, err := config.TargetHome()
+	if err != nil {
+		return err
+	}
+	return managedhome.Adopt(source, paths.ManagedHome, home, paths.Root, a.reporter, dry)
 }
 
 func (a *app) sync(dry bool) error {

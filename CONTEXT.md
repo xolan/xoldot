@@ -89,6 +89,13 @@ A read-only view of the managed home and Alias changes that Apply would make.
 _Avoid_: Status, because Diff shows planned changes rather than all inspected
 state
 
+**Adopt**:
+Transactional transfer of one existing ordinary file from the Target home to
+the matching managed home content path. Adopt replaces the original with an
+xoldot-owned link, but does not Apply or Sync. It serializes ownership-ledger
+updates and restores only transaction-owned paths that have not been replaced.
+_Avoid_: Apply, import
+
 **Sync**:
 Git synchronization of a Configuration repository. It commits Configuration
 changes, rebases from the configured remote branch when present, and pushes,

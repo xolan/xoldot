@@ -248,19 +248,35 @@ Every file below `files/home` maps to the same path below your home directory:
                          -> ~/.config/git/config
 ```
 
-To start managing an existing file, move it into the configuration tree and
-apply:
+To start managing an existing file, adopt it:
 
 ```sh
-mkdir -p ~/.config/xoldot/files/home/.config/git
-mv ~/.config/git/config ~/.config/xoldot/files/home/.config/git/config
-xoldot apply
+xoldot adopt ~/.config/git/config
 ```
 
-xoldot creates the parent directories and symlinks the file. It will not
-replace an existing file or a symlink that points somewhere else. If you
-remove a managed file, the next Apply that includes `managed-home` removes its
-old home link only when that link still points to the managed location.
+Adopt stages the file at the matching path below `files/home`, checks its bytes
+and permission bits, and then replaces the original with the same link that
+apply would create. Staging uses a copy, so a Configuration directory on a
+different filesystem is supported. The source stays unchanged until the copy
+has been checked. Run `xoldot setup` first so the managed home directory exists.
+
+Adopt serializes ownership-state updates. If another xoldot process changes the
+state after a command plans its work, the stale command stops before moving its
+source. A later failure restores paths only when they are still the exact files,
+directories, or links created by that command. It preserves unexpected
+replacements and reports the backup that still contains the original file.
+
+The first release adopts one ordinary file at a time. It refuses directories,
+symlinks, special files, paths outside the Target home, paths inside the
+Configuration directory, and any path whose managed destination already
+exists. It preserves file bytes and permission bits, but not extended
+attributes or other platform-specific metadata. Adopt does not apply Tools or
+Aliases and does not sync the Configuration repository.
+
+xoldot creates parent directories when it links managed files. It will not
+replace an existing file or a symlink that points somewhere else. If you remove
+a managed file, the next Apply that includes `managed-home` removes its old
+home link only when that link still points to the managed location.
 
 ## Sync
 
@@ -272,18 +288,20 @@ Sync commits local changes as `xoldot sync`, pulls the configured branch with
 rebase, and pushes it. Git provides the author identity and remote
 authentication.
 
-Preview an apply or sync without changing anything:
+Preview inspection, adoption, Apply, or Sync without changing anything:
 
 ```sh
 xoldot status
 xoldot diff
+xoldot adopt ~/.config/git/config --dry
 xoldot apply --dry
 xoldot sync --dry
 ```
 
-Dry Apply does not run selected Tool checks because they are user-authored
-shell commands. Unlike `xoldot diff`, dry Apply also describes what each
-selected Tool check and installation would do.
+Dry adoption prints the exact move and link. Dry Apply does not run selected
+Tool checks because they are user-authored shell commands. Unlike `xoldot diff`,
+dry Apply also describes what each selected Tool check and installation would
+do.
 
 ## Shell completion
 

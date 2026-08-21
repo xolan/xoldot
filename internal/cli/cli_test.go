@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,6 +54,89 @@ func TestSetupWithoutRemoteThenAliasToolAndApply(t *testing.T) {
 	}
 	if !bytes.Contains(aliasData, []byte("alias ll='ls -la'")) {
 		t.Errorf("rendered aliases = %q", aliasData)
+	}
+}
+
+func TestAdoptMovesOnlyTheSelectedHomeFile(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "config")
+	home := filepath.Join(t.TempDir(), "home")
+	paths := config.NewPaths(root)
+	if err := config.Initialize(paths); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.TargetHomeEnv, home)
+	source := filepath.Join(home, ".config", "example", "settings")
+	if err := os.MkdirAll(filepath.Dir(source), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, []byte("selected\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sibling := filepath.Join(paths.ManagedHome, "sibling")
+	if err := os.WriteFile(sibling, []byte("leave unlinked\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tools := `[[tool]]
+name = "must-not-run"
+check = "exit 1"
+
+[[tool.install]]
+platform = "linux"
+command = "exit 23"
+`
+	if err := os.WriteFile(paths.Tools, []byte(tools), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.Aliases, []byte("[[alias]]\nname = \"untouched\"\ncommand = \"true\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := Run([]string{"--config-dir", root, "adopt", source}, bytes.NewReader(nil), &output, &output, "test"); err != nil {
+		t.Fatalf("adopt error = %v\noutput:\n%s", err, output.String())
+	}
+	destination := filepath.Join(paths.ManagedHome, ".config", "example", "settings")
+	if link, err := os.Readlink(source); err != nil || link != destination {
+		t.Errorf("adopted link = %q, %v; want %q", link, err, destination)
+	}
+	if _, err := os.Lstat(filepath.Join(home, "sibling")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("adopt linked a sibling: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".aliases")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("adopt rendered aliases: %v", err)
+	}
+}
+
+func TestAdoptDryPrintsExactMoveAndLink(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "config")
+	home := filepath.Join(t.TempDir(), "home")
+	paths := config.NewPaths(root)
+	if err := config.Initialize(paths); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.TargetHomeEnv, home)
+	source := filepath.Join(home, ".vimrc")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, []byte("set number\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := Run([]string{"--config-dir", root, "adopt", source, "--dry"}, bytes.NewReader(nil), &output, &output, "test"); err != nil {
+		t.Fatalf("dry adopt error = %v", err)
+	}
+	destination := filepath.Join(paths.ManagedHome, ".vimrc")
+	want := fmt.Sprintf("› Would move %s -> %s\n› Would link %s -> %s\n", source, destination, source, destination)
+	if output.String() != want {
+		t.Errorf("output = %q, want %q", output.String(), want)
+	}
+	if info, err := os.Lstat(source); err != nil || !info.Mode().IsRegular() {
+		t.Errorf("dry adoption changed source: %v, %v", info, err)
+	}
+	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("dry adoption created destination: %v", err)
 	}
 }
 

@@ -1,7 +1,6 @@
 package managedhome
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -10,7 +9,6 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/xolan/xoldot/internal/config"
 	"github.com/xolan/xoldot/internal/pathutil"
 	reportstatus "github.com/xolan/xoldot/internal/status"
 )
@@ -97,13 +95,16 @@ func newUnownedConflict(record linkRecord) plannedConflict {
 }
 
 type Plan struct {
-	ledgerPath string
-	previous   linkLedger
-	links      []linkPlan
-	records    []linkRecord
-	stale      []linkRecord
-	current    []linkRecord
-	conflicts  []plannedConflict
+	layout    managedHomeLayout
+	previous  linkLedger
+	links     []linkPlan
+	records   []linkRecord
+	stale     []linkRecord
+	current   []linkRecord
+	conflicts []plannedConflict
+	// Adoption roots target mutations to the prepared home. Link retains its
+	// existing support for home directories redirected through absolute links.
+	rootedTargets bool
 }
 
 func Link(managedRoot, home, configRoot string, reporter reportstatus.Reporter, dry bool) (Result, error) {
@@ -134,38 +135,20 @@ func Inspect(managedRoot, home, configRoot string) (Inspection, error) {
 }
 
 func prepare(managedRoot, home, configRoot string) (Plan, error) {
-	managedRoot, err := filepath.Abs(managedRoot)
-	if err != nil {
-		return Plan{}, fmt.Errorf("resolve managed home: %w", err)
-	}
-	home, err = filepath.Abs(home)
-	if err != nil {
-		return Plan{}, fmt.Errorf("resolve target home: %w", err)
-	}
-	configRoot, err = filepath.Abs(configRoot)
-	if err != nil {
-		return Plan{}, fmt.Errorf("resolve config root: %w", err)
-	}
-	managedRoot, err = pathutil.ResolveExistingPrefix(managedRoot)
-	if err != nil {
-		return Plan{}, fmt.Errorf("resolve managed home symlinks: %w", err)
-	}
-	home, err = pathutil.ResolveExistingPrefix(home)
-	if err != nil {
-		return Plan{}, fmt.Errorf("resolve target home symlinks: %w", err)
-	}
-	configRoot, err = pathutil.ResolveExistingPrefix(configRoot)
-	if err != nil {
-		return Plan{}, fmt.Errorf("resolve config root symlinks: %w", err)
-	}
-
-	ledgerPath := filepath.Join(home, ".local", "state", "xoldot", "links.json")
-	previous, err := loadLedger(ledgerPath)
+	layout, err := newManagedHomeLayout(managedRoot, home, configRoot)
 	if err != nil {
 		return Plan{}, err
 	}
-	if err := validateLedger(previous, home, managedRoot); err != nil {
-		return Plan{}, fmt.Errorf("validate managed link state %s: %w", ledgerPath, err)
+	managedRoot = layout.ManagedRoot
+	home = layout.Home
+	configRoot = layout.ConfigRoot
+
+	previous, err := layout.loadLedger()
+	if err != nil {
+		return Plan{}, err
+	}
+	if err := layout.validateLedger(previous); err != nil {
+		return Plan{}, err
 	}
 
 	var plans []linkPlan
@@ -192,7 +175,7 @@ func prepare(managedRoot, home, configRoot string) (Plan, error) {
 			return fmt.Errorf("find path for %s: %w", source, err)
 		}
 		target := filepath.Join(home, relative)
-		if target == ledgerPath {
+		if layout.reservedTarget(target) {
 			return fmt.Errorf("managed path %s is reserved for xoldot link state", source)
 		}
 		destination := source
@@ -281,13 +264,13 @@ func prepare(managedRoot, home, configRoot string) (Plan, error) {
 	}
 
 	return Plan{
-		ledgerPath: ledgerPath,
-		previous:   previous,
-		links:      plans,
-		records:    records,
-		stale:      stale,
-		current:    current,
-		conflicts:  conflicts,
+		layout:    layout,
+		previous:  previous,
+		links:     plans,
+		records:   records,
+		stale:     stale,
+		current:   current,
+		conflicts: conflicts,
 	}, nil
 }
 
@@ -330,6 +313,35 @@ func walkManagedRoot(root string, walk fs.WalkDirFunc) error {
 }
 
 func (plan Plan) Apply(reporter reportstatus.Reporter, dry bool) (Result, error) {
+	if dry {
+		return plan.apply(reporter, true, nil, nil)
+	}
+	home, err := plan.layout.openLockedHome(plan.previous)
+	if err != nil {
+		return Result{}, err
+	}
+
+	transaction := linkTransaction{}
+	result, err := plan.apply(reporter, false, &transaction, home.root)
+	if err != nil {
+		return result, errors.Join(
+			err,
+			transaction.rollback(),
+			home.close(),
+		)
+	}
+	return result, errors.Join(
+		transaction.commit(),
+		home.close(),
+	)
+}
+
+func (plan Plan) apply(
+	reporter reportstatus.Reporter,
+	dry bool,
+	transaction *linkTransaction,
+	homeRoot *os.Root,
+) (Result, error) {
 	result := Result{Current: len(plan.current)}
 	if dry {
 		for _, change := range plan.changes() {
@@ -345,7 +357,7 @@ func (plan Plan) Apply(reporter reportstatus.Reporter, dry bool) (Result, error)
 		return result, nil
 	}
 	for _, record := range plan.current {
-		owned, err := exactSymlink(record.Target, record.Destination)
+		owned, err := plan.targetIsExactLink(homeRoot, record)
 		if err != nil {
 			return result, err
 		}
@@ -354,57 +366,123 @@ func (plan Plan) Apply(reporter reportstatus.Reporter, dry bool) (Result, error)
 		}
 	}
 
-	transaction := linkTransaction{}
-	fail := func(err error) (Result, error) {
-		return result, errors.Join(err, transaction.rollback())
-	}
 	for _, link := range plan.links {
 		if link.ReplaceLegacySkillDirectory {
-			backup, err := backupLegacySkillDirectory(link.Target, plan.previous)
-			if err != nil {
-				return fail(err)
+			if err := plan.backupLegacySkillDirectory(homeRoot, transaction, link); err != nil {
+				return result, err
 			}
-			transaction.backups = append(transaction.backups, backup)
 			result.Removed += link.LegacyLinks
 		}
-		if err := transaction.makeDirectories(filepath.Dir(link.Target)); err != nil {
-			return fail(fmt.Errorf("create target directory for %s: %w", link.Target, err))
+		if err := plan.makeTargetDirectories(homeRoot, transaction, link.Target); err != nil {
+			return result, fmt.Errorf("create target directory for %s: %w", link.Target, err)
 		}
-		if err := os.Symlink(link.Destination, link.Target); err != nil {
-			return fail(fmt.Errorf("link %s to %s: %w", link.Target, link.Destination, err))
+		if err := plan.createTargetSymlink(homeRoot, transaction, link.linkRecord); err != nil {
+			return result, fmt.Errorf("link %s to %s: %w", link.Target, link.Destination, err)
 		}
-		transaction.created = append(transaction.created, link.Target)
+		if err := transaction.after(transactionStepLinkCreated); err != nil {
+			return result, err
+		}
 		if err := reportf(reporter, "Linked %s -> %s", link.Target, link.Destination); err != nil {
-			return fail(err)
+			return result, err
 		}
 		result.Created++
 	}
 	for _, record := range plan.stale {
-		owned, err := exactSymlink(record.Target, record.Destination)
+		owned, err := plan.targetIsExactLink(homeRoot, record)
 		if err != nil {
-			return fail(err)
+			return result, err
 		}
 		if !owned {
 			continue
 		}
-		if err := os.Remove(record.Target); err != nil {
-			return fail(fmt.Errorf("remove stale managed link %s: %w", record.Target, err))
+		if err := plan.removeTargetSymlink(homeRoot, transaction, record); err != nil {
+			return result, fmt.Errorf("remove stale managed link %s: %w", record.Target, err)
 		}
-		transaction.removed = append(transaction.removed, record)
 		if err := reportf(reporter, "Removed stale link %s", record.Target); err != nil {
-			return fail(err)
+			return result, err
 		}
 		result.Removed++
 	}
 	if !slices.Equal(plan.previous.Links, plan.records) {
-		if err := transaction.makeDirectories(filepath.Dir(plan.ledgerPath)); err != nil {
-			return fail(fmt.Errorf("create managed link state directory: %w", err))
+		if err := transaction.saveLedger(homeRoot, plan.layout, plan.records); err != nil {
+			return result, err
 		}
-		if err := saveLedger(plan.ledgerPath, plan.records); err != nil {
-			return fail(err)
+		if err := transaction.after(transactionStepLedgerSaved); err != nil {
+			return result, err
 		}
 	}
-	return result, transaction.commit()
+	return result, nil
+}
+
+func (plan Plan) targetIsExactLink(homeRoot *os.Root, record linkRecord) (bool, error) {
+	if !plan.rootedTargets {
+		return exactSymlink(record.Target, record.Destination)
+	}
+	relative, err := plan.layout.homeRelative(record.Target)
+	if err != nil {
+		return false, err
+	}
+	return exactRootSymlink(homeRoot, relative, record.Destination)
+}
+
+func (plan Plan) backupLegacySkillDirectory(
+	homeRoot *os.Root,
+	transaction *linkTransaction,
+	link linkPlan,
+) error {
+	if !plan.rootedTargets {
+		return transaction.backupLegacySkillDirectoryAbsolute(link.Target, plan.previous)
+	}
+	relative, err := plan.layout.homeRelative(link.Target)
+	if err != nil {
+		return err
+	}
+	return transaction.backupLegacySkillDirectory(homeRoot, relative, link.Target, plan.previous)
+}
+
+func (plan Plan) makeTargetDirectories(
+	homeRoot *os.Root,
+	transaction *linkTransaction,
+	target string,
+) error {
+	if !plan.rootedTargets {
+		return transaction.makeDirectoriesAbsolute(filepath.Dir(target))
+	}
+	relative, err := plan.layout.homeRelative(target)
+	if err != nil {
+		return err
+	}
+	return transaction.makeDirectories(homeRoot, filepath.Dir(relative))
+}
+
+func (plan Plan) createTargetSymlink(
+	homeRoot *os.Root,
+	transaction *linkTransaction,
+	record linkRecord,
+) error {
+	if !plan.rootedTargets {
+		return transaction.createSymlinkAbsolute(record.Destination, record.Target)
+	}
+	relative, err := plan.layout.homeRelative(record.Target)
+	if err != nil {
+		return err
+	}
+	return transaction.createSymlink(homeRoot, record.Destination, relative, record.Target)
+}
+
+func (plan Plan) removeTargetSymlink(
+	homeRoot *os.Root,
+	transaction *linkTransaction,
+	record linkRecord,
+) error {
+	if !plan.rootedTargets {
+		return transaction.removeSymlinkAbsolute(record.Target, record.Destination)
+	}
+	relative, err := plan.layout.homeRelative(record.Target)
+	if err != nil {
+		return err
+	}
+	return transaction.removeSymlink(homeRoot, relative, record.Target, record.Destination)
 }
 
 func isSkillDirectory(managedRoot, path string) bool {
@@ -482,109 +560,6 @@ func legacySkillDirectory(target string, previous linkLedger) (int, bool, error)
 	return links, true, nil
 }
 
-type legacyBackup struct {
-	target    string
-	directory string
-}
-
-func backupLegacySkillDirectory(target string, previous linkLedger) (legacyBackup, error) {
-	_, replace, err := legacySkillDirectory(target, previous)
-	if err != nil {
-		return legacyBackup{}, err
-	}
-	if !replace {
-		return legacyBackup{}, fmt.Errorf("legacy skill directory %s changed while applying links", target)
-	}
-	directory, err := os.MkdirTemp(filepath.Dir(target), ".xoldot-link-backup-*")
-	if err != nil {
-		return legacyBackup{}, fmt.Errorf("create backup for legacy skill directory %s: %w", target, err)
-	}
-	backup := legacyBackup{target: target, directory: directory}
-	if err := os.Rename(target, backup.path()); err != nil {
-		_ = os.RemoveAll(directory)
-		return legacyBackup{}, fmt.Errorf("back up legacy skill directory %s: %w", target, err)
-	}
-	return backup, nil
-}
-
-func (backup legacyBackup) path() string {
-	return filepath.Join(backup.directory, "skill")
-}
-
-type linkTransaction struct {
-	created            []string
-	createdDirectories []string
-	removed            []linkRecord
-	backups            []legacyBackup
-}
-
-func (transaction *linkTransaction) makeDirectories(path string) error {
-	var missing []string
-	for current := path; ; current = filepath.Dir(current) {
-		if _, err := os.Lstat(current); err == nil {
-			break
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		missing = append(missing, current)
-		next := filepath.Dir(current)
-		if next == current {
-			break
-		}
-	}
-	transaction.createdDirectories = append(transaction.createdDirectories, missing...)
-	return os.MkdirAll(path, 0o755)
-}
-
-func (transaction linkTransaction) rollback() error {
-	var rollbackErrors []error
-	for index := len(transaction.created) - 1; index >= 0; index-- {
-		if err := os.Remove(transaction.created[index]); err != nil && !errors.Is(err, os.ErrNotExist) {
-			rollbackErrors = append(rollbackErrors, fmt.Errorf("roll back link %s: %w", transaction.created[index], err))
-		}
-	}
-	for index := len(transaction.removed) - 1; index >= 0; index-- {
-		record := transaction.removed[index]
-		if err := os.MkdirAll(filepath.Dir(record.Target), 0o755); err != nil {
-			rollbackErrors = append(rollbackErrors, fmt.Errorf("restore target directory for %s: %w", record.Target, err))
-			continue
-		}
-		if err := os.Symlink(record.Destination, record.Target); err != nil {
-			rollbackErrors = append(rollbackErrors, fmt.Errorf("restore stale link %s: %w", record.Target, err))
-		}
-	}
-	for index := len(transaction.backups) - 1; index >= 0; index-- {
-		backup := transaction.backups[index]
-		if err := os.RemoveAll(backup.target); err != nil {
-			rollbackErrors = append(rollbackErrors, fmt.Errorf("clear replacement link %s: %w", backup.target, err))
-			continue
-		}
-		if err := os.Rename(backup.path(), backup.target); err != nil {
-			rollbackErrors = append(rollbackErrors, fmt.Errorf("restore legacy skill directory %s: %w", backup.target, err))
-			continue
-		}
-		if err := os.RemoveAll(backup.directory); err != nil {
-			rollbackErrors = append(rollbackErrors, err)
-		}
-	}
-	for _, directory := range transaction.createdDirectories {
-		if err := os.Remove(directory); err != nil && !errors.Is(err, os.ErrNotExist) {
-			rollbackErrors = append(rollbackErrors, fmt.Errorf("roll back directory %s: %w", directory, err))
-		}
-	}
-	return errors.Join(rollbackErrors...)
-}
-
-func (transaction linkTransaction) commit() error {
-	var cleanupErrors []error
-	for _, backup := range transaction.backups {
-		if err := os.RemoveAll(backup.directory); err != nil {
-			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove legacy skill backup: %w", err))
-		}
-	}
-	return errors.Join(cleanupErrors...)
-}
-
 func reportf(reporter reportstatus.Reporter, format string, arguments ...any) error {
 	if err := reportstatus.Reportf(reporter, reportstatus.Progress, format, arguments...); err != nil {
 		return fmt.Errorf("write link status: %w", err)
@@ -638,56 +613,6 @@ func exactSymlink(path, destination string) (bool, error) {
 		return false, fmt.Errorf("read previous managed link %s: %w", path, err)
 	}
 	return actual == destination, nil
-}
-
-func loadLedger(path string) (linkLedger, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return linkLedger{Version: 1}, nil
-	}
-	if err != nil {
-		return linkLedger{}, fmt.Errorf("read managed link state: %w", err)
-	}
-	var ledger linkLedger
-	if err := json.Unmarshal(data, &ledger); err != nil {
-		return linkLedger{}, fmt.Errorf("parse managed link state %s: %w", path, err)
-	}
-	if ledger.Version != 1 {
-		return linkLedger{}, fmt.Errorf("unsupported managed link state version %d", ledger.Version)
-	}
-	return ledger, nil
-}
-
-func validateLedger(ledger linkLedger, home, managedRoot string) error {
-	seen := make(map[string]struct{}, len(ledger.Links))
-	for _, record := range ledger.Links {
-		if !filepath.IsAbs(record.Target) || record.Target == home || !pathutil.Contains(home, record.Target) {
-			return fmt.Errorf("recorded target %q is outside the target home", record.Target)
-		}
-		if record.Destination == "" {
-			return fmt.Errorf("recorded target %q has an empty destination", record.Target)
-		}
-		if filepath.IsAbs(record.Destination) && !pathutil.Contains(managedRoot, record.Destination) {
-			return fmt.Errorf("recorded destination %q is outside the managed home", record.Destination)
-		}
-		if _, exists := seen[record.Target]; exists {
-			return fmt.Errorf("recorded target %q is duplicated", record.Target)
-		}
-		seen[record.Target] = struct{}{}
-	}
-	return nil
-}
-
-func saveLedger(path string, records []linkRecord) error {
-	data, err := json.MarshalIndent(linkLedger{Version: 1, Links: records}, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode managed link state: %w", err)
-	}
-	data = append(data, '\n')
-	if err := config.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("save managed link state: %w", err)
-	}
-	return nil
 }
 
 func mappedSymlinkDestination(source, target, managedRoot, home, configRoot string) (string, error) {
