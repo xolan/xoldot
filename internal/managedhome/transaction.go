@@ -23,10 +23,14 @@ type linkTransaction struct {
 type transactionStep string
 
 const (
-	transactionStepDestinationStaged transactionStep = "destination staged"
-	transactionStepSourceBackedUp    transactionStep = "source backed up"
-	transactionStepLinkCreated       transactionStep = "link created"
-	transactionStepLedgerSaved       transactionStep = "ledger saved"
+	transactionStepDestinationStaged   transactionStep = "destination staged"
+	transactionStepSourceBackedUp      transactionStep = "source backed up"
+	transactionStepConflictBackedUp    transactionStep = "conflict backed up"
+	transactionStepLinkCreated         transactionStep = "link created"
+	transactionStepBackupRestored      transactionStep = "backup restored"
+	transactionStepLedgerSaved         transactionStep = "ledger saved"
+	transactionStepBackupManifestSaved transactionStep = "backup manifest saved"
+	transactionStepBackupRemovalStaged transactionStep = "backup removal staged"
 )
 
 type ledgerSnapshot struct {
@@ -153,6 +157,25 @@ func (transaction *linkTransaction) makeDirectoriesAbsolute(path string) error {
 }
 
 func (transaction *linkTransaction) createDirectory(root *os.Root, relative, display string, mode os.FileMode) error {
+	return transaction.createTrackedDirectory(root, relative, display, mode, true)
+}
+
+func (transaction *linkTransaction) createPersistentDirectory(
+	root *os.Root,
+	relative string,
+	display string,
+	mode os.FileMode,
+) error {
+	return transaction.createTrackedDirectory(root, relative, display, mode, false)
+}
+
+func (transaction *linkTransaction) createTrackedDirectory(
+	root *os.Root,
+	relative string,
+	display string,
+	mode os.FileMode,
+	removeOnCommit bool,
+) error {
 	if err := root.Mkdir(relative, mode); err != nil {
 		return err
 	}
@@ -169,11 +192,15 @@ func (transaction *linkTransaction) createDirectory(root *os.Root, relative, dis
 	remove := func(action string) error {
 		return removeMatchingFile(root, relative, identity, action+" "+display)
 	}
+	commit := handle.Close
+	if removeOnCommit {
+		commit = func() error {
+			return closeAfter(func() error { return remove("remove transaction directory") }, handle)
+		}
+	}
 	transaction.append(
 		func() error { return closeAfter(func() error { return remove("roll back directory") }, handle) },
-		func() error {
-			return closeAfter(func() error { return remove("remove transaction directory") }, handle)
-		},
+		commit,
 	)
 	return nil
 }

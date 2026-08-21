@@ -14,8 +14,10 @@ import (
 )
 
 const (
-	ledgerRelativePath = ".local/state/xoldot/links.json"
-	lockRelativePath   = ".local/state/xoldot/links.lock"
+	stateRelativePath   = ".local/state/xoldot"
+	ledgerRelativePath  = stateRelativePath + "/links.json"
+	lockRelativePath    = stateRelativePath + "/links.lock"
+	backupsRelativePath = stateRelativePath + "/backups"
 )
 
 type managedHomeLayout struct {
@@ -168,7 +170,9 @@ func relativeWithin(root, path, description string) (string, error) {
 }
 
 func (layout managedHomeLayout) reservedTarget(path string) bool {
-	return path == layout.LedgerPath || path == layout.LockPath
+	backups := filepath.Join(layout.Home, filepath.FromSlash(backupsRelativePath))
+	return path == layout.LedgerPath || path == layout.LockPath ||
+		path == backups || pathutil.Contains(backups, path)
 }
 
 func (layout managedHomeLayout) loadLedger() (linkLedger, error) {

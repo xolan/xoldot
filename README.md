@@ -78,6 +78,7 @@ more than one:
 xoldot apply --only managed-home
 xoldot apply --only managed-home --only aliases
 xoldot apply --only tools --dry
+xoldot apply --backup --only managed-home
 ```
 
 The accepted values are exactly `tools`, `managed-home`, and `aliases`.
@@ -139,6 +140,11 @@ are errors. Profile validation reads the complete Tool, Alias, and Skill
 catalogs even when `--only` narrows Apply. Selection then filters the
 Configuration before the existing Apply, Status, and Diff planners run.
 
+Apply refuses managed home conflicts by default. `--backup` opts into replacing
+conflicting regular files and symlinks. It does not change conflict handling for
+Tools or Aliases, and it requires the `managed-home` Apply part. See
+[Conflict backup and restore](#conflict-backup-and-restore) before using it.
+
 ## Inspect before applying
 
 Inspect the current Machine without changing it:
@@ -148,9 +154,15 @@ xoldot status
 ```
 
 Status lists each managed home link as current, missing, stale, or conflicting.
+It marks regular-file and symlink conflicts that `apply --backup` can save.
 It reports the Alias output as current, missing, safely replaceable, or
 conflicting. It also verifies installed Skill digests and ownership using local
 files.
+
+Status also lists restorable backup runs. An incomplete run has no complete
+manifest, which can happen if a process stops outside the normal rollback path.
+An invalid run has a malformed manifest, missing or unexpected content, or
+stored content that no longer matches its recorded type, mode, and digest.
 
 Status counts declared Tools as unchecked. It does not run their `check`
 commands because those commands are user-authored shell code. It also does not
@@ -368,6 +380,48 @@ replace an existing file or a symlink that points somewhere else. If you remove
 a managed file, the next Apply that includes `managed-home` removes its old
 home link only when that link still points to the managed location.
 
+### Conflict backup and restore
+
+Conflict backup deliberately moves user content. Preview the operation first:
+
+```sh
+xoldot apply --backup --only managed-home --dry
+xoldot apply --backup --only managed-home
+```
+
+Without `--backup`, Apply keeps its normal conflict refusal. With the flag,
+xoldot moves each conflicting regular file or symlink into one run below
+`~/.local/state/xoldot/backups/<backup-id>/`, writes a manifest, and creates the
+planned managed link. The command prints the backup ID. Backup data stays on
+the Machine and is not part of the Configuration repository or Sync.
+
+The managed-home transaction rolls back its backups and links if that part of
+Apply fails. Other Apply parts remain separate transactions. A later Alias
+failure does not undo a completed managed-home backup, and a Tool installation
+is never backed up or rolled back by this flag.
+
+Restore the entire run by ID:
+
+```sh
+xoldot restore <backup-id> --dry
+xoldot restore <backup-id>
+```
+
+Restore checks every entry before changing anything. Every target must still be
+the xoldot-owned link recorded by the backup run, and every stored file or
+symlink must still match the manifest. Restore refuses the whole run if a
+target, backup, manifest, or ownership record changed. A successful restore
+recreates all original files and symlinks with their recorded permission bits,
+drops their managed-link ownership records, and removes the consumed backup
+run.
+
+The first release does not back up directories or special files. It does not
+delete conflicts, retain generations, prune backups, restore part of a run, or
+roll back Tools and Aliases. Backup and restore refuse paths that escape the
+Target home, including paths redirected through an outside symlink. Do not edit
+the state directory. If it is deleted or damaged, xoldot cannot restore that
+backup.
+
 ## Sync
 
 ```sh
@@ -379,8 +433,8 @@ rebase, and pushes it. Git provides the author identity and remote
 authentication. Sync always synchronizes the complete Configuration repository
 and does not select a Profile.
 
-Inspect the Machine or preview adoption, Apply, and Sync without changing
-anything:
+Inspect the Machine or preview adoption, Apply, Restore, and Sync without
+changing anything:
 
 ```sh
 xoldot status
@@ -388,13 +442,17 @@ xoldot diff
 xoldot adopt ~/.config/git/config --dry
 xoldot doctor
 xoldot apply --dry
+xoldot apply --backup --only managed-home --dry
+xoldot restore <backup-id> --dry
 xoldot sync --dry
 ```
 
 Dry adoption prints the exact move and link. Dry Apply does not run selected
 Tool checks because they are user-authored shell commands. Unlike `xoldot diff`,
 dry Apply also describes what each selected Tool check and installation would
-do.
+do. A dry backup reports eligible conflicts and refuses directories, special
+files, and paths outside the Target home without writing state. Dry restore
+checks the same all-or-nothing preconditions as restore and changes nothing.
 
 ## Shell completion
 
@@ -425,9 +483,9 @@ to install it.
   directory.
 - `NO_COLOR` or `TERM=dumb` disables color.
 
-Conflict backup or force modes and shells other than Bash, Zsh, and Fish are
-not supported yet. Profiles cannot select themselves from a hostname,
-operating system, distribution, architecture, or environment value.
+Force deletion and shells other than Bash, Zsh, and Fish are not supported.
+Profiles cannot select themselves from a hostname, operating system,
+distribution, architecture, or environment value.
 
 ## Development
 

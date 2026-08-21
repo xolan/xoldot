@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -73,6 +74,7 @@ type applyPlan struct {
 
 func (a *app) applyCommand() *cobra.Command {
 	var dry bool
+	var backup bool
 	var only []string
 	var profile string
 	command := &cobra.Command{
@@ -84,10 +86,14 @@ func (a *app) applyCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return a.apply(dry, selection, profile)
+			if backup && !selection.managedHome {
+				return fmt.Errorf("--backup requires the managed-home Apply part")
+			}
+			return a.apply(dry, backup, selection, profile)
 		},
 	}
 	command.Flags().BoolVar(&dry, "dry", false, "show what would change without changing it")
+	command.Flags().BoolVar(&backup, "backup", false, "back up eligible managed-home conflicts before linking")
 	command.Flags().StringVar(&profile, "profile", "", "select one profile before applying")
 	command.Flags().StringArrayVar(
 		&only,
@@ -106,7 +112,7 @@ func (a *app) applyCommand() *cobra.Command {
 	return command
 }
 
-func (a *app) apply(dry bool, selection applySelection, profile string) error {
+func (a *app) apply(dry, backup bool, selection applySelection, profile string) error {
 	paths, err := a.paths()
 	if err != nil {
 		return err
@@ -122,14 +128,26 @@ func (a *app) apply(dry bool, selection applySelection, profile string) error {
 	if err != nil {
 		return err
 	}
-	plan, err := prepareApply(paths, cfg, selection, input)
+	plan, err := prepareApply(paths, cfg, selection, input, backup)
 	if err != nil {
+		var refusal *managedhome.PreparationRefusal
+		if dry && errors.As(err, &refusal) {
+			if previewErr := refusal.Preview(a.reporter); previewErr != nil {
+				return errors.Join(err, previewErr)
+			}
+		}
 		return err
 	}
 	return a.executeApply(plan, dry)
 }
 
-func prepareApply(paths config.Paths, cfg config.Config, selection applySelection, input configurationInput) (applyPlan, error) {
+func prepareApply(
+	paths config.Paths,
+	cfg config.Config,
+	selection applySelection,
+	input configurationInput,
+	backup bool,
+) (applyPlan, error) {
 	plan := applyPlan{selection: selection}
 	var err error
 	if selection.tools {
@@ -162,7 +180,21 @@ func prepareApply(paths config.Paths, cfg config.Config, selection applySelectio
 		}
 	}
 	if selection.managedHome {
-		plan.managedHome, err = managedhome.PrepareSelected(paths.ManagedHome, home, paths.Root, input.managedHomeFilter)
+		if backup {
+			plan.managedHome, err = managedhome.PrepareBackupSelected(
+				paths.ManagedHome,
+				home,
+				paths.Root,
+				input.managedHomeFilter,
+			)
+		} else {
+			plan.managedHome, err = managedhome.PrepareSelected(
+				paths.ManagedHome,
+				home,
+				paths.Root,
+				input.managedHomeFilter,
+			)
+		}
 		if err != nil {
 			return applyPlan{}, err
 		}
@@ -199,6 +231,11 @@ func (a *app) executeApply(plan applyPlan, dry bool) error {
 			linked.Current,
 		); err != nil {
 			return err
+		}
+		if linked.BackupID != "" {
+			if err := a.reportf(status.Success, "Backup ID: %s", linked.BackupID); err != nil {
+				return err
+			}
 		}
 	}
 	if !plan.selection.aliases {

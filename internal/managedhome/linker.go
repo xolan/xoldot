@@ -15,9 +15,10 @@ import (
 )
 
 type Result struct {
-	Created int
-	Current int
-	Removed int
+	Created  int
+	Current  int
+	Removed  int
+	BackupID string
 }
 
 type State string
@@ -30,10 +31,11 @@ const (
 )
 
 type Entry struct {
-	State       State
-	Target      string
-	Destination string
-	Problem     string
+	State             State
+	Target            string
+	Destination       string
+	Problem           string
+	EligibleForBackup bool
 }
 
 func (entry Entry) PlanDescription() string {
@@ -43,6 +45,9 @@ func (entry Entry) PlanDescription() string {
 	case StateStale:
 		return fmt.Sprintf("Would remove stale link %s", entry.Target)
 	case StateConflict:
+		if entry.EligibleForBackup {
+			return fmt.Sprintf("Conflict at %s: %s; eligible for --backup", entry.Target, entry.Problem)
+		}
 		return fmt.Sprintf("Conflict at %s: %s", entry.Target, entry.Problem)
 	default:
 		return ""
@@ -89,6 +94,7 @@ type linkRecord struct {
 type linkPlan struct {
 	linkRecord
 	ReplaceLegacySkillDirectory bool
+	BackupConflict              bool
 	LegacyLinks                 int
 }
 
@@ -127,6 +133,40 @@ type Plan struct {
 	rootedTargets bool
 }
 
+type PreparationRefusal struct {
+	err       error
+	backups   []linkRecord
+	changes   []Entry
+	conflicts []Entry
+}
+
+func (refusal *PreparationRefusal) Error() string {
+	return refusal.err.Error()
+}
+
+func (refusal *PreparationRefusal) Unwrap() error {
+	return refusal.err
+}
+
+func (refusal *PreparationRefusal) Preview(reporter reportstatus.Reporter) error {
+	for _, backup := range refusal.backups {
+		if err := reportf(reporter, "Would back up %s before linking", backup.Target); err != nil {
+			return err
+		}
+	}
+	for _, change := range refusal.changes {
+		if err := reportf(reporter, "%s", change.PlanDescription()); err != nil {
+			return err
+		}
+	}
+	for _, conflict := range refusal.conflicts {
+		if err := reportf(reporter, "%s", conflict.PlanDescription()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func Link(managedRoot, home, configRoot string, reporter reportstatus.Reporter, dry bool) (Result, error) {
 	plan, err := Prepare(managedRoot, home, configRoot)
 	if err != nil {
@@ -150,6 +190,49 @@ func PrepareSelected(managedRoot, home, configRoot string, include PathFilter) (
 	return plan, nil
 }
 
+func PrepareBackup(managedRoot, home, configRoot string) (Plan, error) {
+	return PrepareBackupSelected(managedRoot, home, configRoot, nil)
+}
+
+func PrepareBackupSelected(managedRoot, home, configRoot string, include PathFilter) (Plan, error) {
+	plan, err := prepare(managedRoot, home, configRoot, include)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.rootedTargets = true
+	if err := plan.classifyBackupConflicts(); err != nil {
+		return Plan{}, err
+	}
+	var backups []linkRecord
+	var refusalErr error
+	var unsupported []Entry
+	for _, conflict := range plan.conflicts {
+		if !conflict.entry.EligibleForBackup {
+			if refusalErr == nil {
+				refusalErr = conflict.err
+			}
+			unsupported = append(unsupported, conflict.entry)
+			continue
+		}
+		backup := linkRecord{
+			Target:      conflict.entry.Target,
+			Destination: conflict.entry.Destination,
+		}
+		backups = append(backups, backup)
+		plan.links = append(plan.links, linkPlan{linkRecord: backup, BackupConflict: true})
+	}
+	if refusalErr != nil {
+		return Plan{}, &PreparationRefusal{
+			err:       refusalErr,
+			backups:   backups,
+			changes:   plan.changes(),
+			conflicts: unsupported,
+		}
+	}
+	plan.conflicts = nil
+	return plan, nil
+}
+
 func Inspect(managedRoot, home, configRoot string) (Inspection, error) {
 	return InspectSelected(managedRoot, home, configRoot, nil)
 }
@@ -159,7 +242,24 @@ func InspectSelected(managedRoot, home, configRoot string, include PathFilter) (
 	if err != nil {
 		return Inspection{}, err
 	}
+	if err := plan.classifyBackupConflicts(); err != nil {
+		return Inspection{}, err
+	}
 	return plan.inspection(), nil
+}
+
+func (plan *Plan) classifyBackupConflicts() error {
+	if len(plan.conflicts) == 0 || plan.layout.homeIdentity == nil {
+		return nil
+	}
+	root, err := plan.layout.openHomeRoot()
+	if err != nil {
+		return err
+	}
+	for index := range plan.conflicts {
+		plan.conflicts[index].entry.EligibleForBackup = eligibleBackupConflict(root, plan.layout, plan.conflicts[index])
+	}
+	return root.Close()
 }
 
 func prepare(managedRoot, home, configRoot string, include PathFilter) (Plan, error) {
@@ -381,6 +481,13 @@ func (plan Plan) apply(
 ) (Result, error) {
 	result := Result{Current: len(plan.current)}
 	if dry {
+		for _, link := range plan.links {
+			if link.BackupConflict {
+				if err := reportf(reporter, "Would back up %s before linking", link.Target); err != nil {
+					return result, err
+				}
+			}
+		}
 		for _, change := range plan.changes() {
 			if err := reportf(reporter, "%s", change.PlanDescription()); err != nil {
 				return result, err
@@ -403,7 +510,23 @@ func (plan Plan) apply(
 		}
 	}
 
+	var backup *backupSession
 	for _, link := range plan.links {
+		if link.BackupConflict {
+			if backup == nil {
+				var err error
+				backup, err = beginBackup(homeRoot, plan.layout, transaction)
+				if err != nil {
+					return result, err
+				}
+			}
+			if err := backup.store(homeRoot, plan.layout, transaction, link.linkRecord); err != nil {
+				return result, err
+			}
+			if err := transaction.after(transactionStepConflictBackedUp); err != nil {
+				return result, err
+			}
+		}
 		if link.ReplaceLegacySkillDirectory {
 			if err := plan.backupLegacySkillDirectory(homeRoot, transaction, link); err != nil {
 				return result, err
@@ -447,6 +570,15 @@ func (plan Plan) apply(
 		if err := transaction.after(transactionStepLedgerSaved); err != nil {
 			return result, err
 		}
+	}
+	if backup != nil {
+		if err := backup.finish(homeRoot); err != nil {
+			return result, err
+		}
+		if err := transaction.after(transactionStepBackupManifestSaved); err != nil {
+			return result, err
+		}
+		result.BackupID = backup.id
 	}
 	return result, nil
 }
