@@ -64,6 +64,8 @@ func (a *app) rootCommand(version string) *cobra.Command {
   xoldot skill list
   xoldot skill remove code-review
   xoldot skill update
+  xoldot status
+  xoldot diff
   xoldot apply --dry
   xoldot sync --dry`,
 	}
@@ -193,6 +195,8 @@ func (a *app) rootCommand(version string) *cobra.Command {
 	root.AddCommand(skillCommand)
 
 	root.AddCommand(a.applyCommand())
+
+	root.AddCommand(a.statusCommand(), a.diffCommand())
 
 	var syncDry bool
 	syncCommand := &cobra.Command{

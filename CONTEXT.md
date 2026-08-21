@@ -78,6 +78,17 @@ One of the independently selectable parts of Apply: Tools, managed home
 content, or Aliases.
 _Avoid_: Component, Step
 
+**Status**:
+A read-only comparison of a Configuration with a Machine. Status reports
+managed home, Alias, and locally verifiable Skill state without running Tool
+checks.
+_Avoid_: Apply, because Status does not change the Machine
+
+**Diff**:
+A read-only view of the managed home and Alias changes that Apply would make.
+_Avoid_: Status, because Diff shows planned changes rather than all inspected
+state
+
 **Sync**:
 Git synchronization of a Configuration repository. It commits Configuration
 changes, rebases from the configured remote branch when present, and pushes,

@@ -657,6 +657,64 @@ func TestManagerAddResolvesRelativeSourceFromCallerDirectory(t *testing.T) {
 	}
 }
 
+func TestManagerInspectReportsCurrentSkill(t *testing.T) {
+	manager, _, _ := testManager(t, []map[string]string{{"SKILL.md": "managed"}})
+	if err := manager.Add("unslop", "https://github.com/poteto/plugins"); err != nil {
+		t.Fatal(err)
+	}
+
+	inspection, err := manager.Inspect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inspection) != 1 || inspection[0].State != InspectionCurrent {
+		t.Errorf("inspection = %+v, want one current skill", inspection)
+	}
+}
+
+func TestManagerInspectReportsDigestProblem(t *testing.T) {
+	manager, _, _ := testManager(t, []map[string]string{{"SKILL.md": "managed"}})
+	if err := manager.Add("unslop", "https://github.com/poteto/plugins"); err != nil {
+		t.Fatal(err)
+	}
+	canonical := manager.canonicalPath("unslop")
+	if err := os.WriteFile(filepath.Join(canonical, "SKILL.md"), []byte("locally changed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	inspection, err := manager.Inspect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inspection) != 1 || inspection[0].State != InspectionProblem ||
+		!strings.Contains(inspection[0].Problem, "local changes") {
+		t.Errorf("inspection = %+v, want digest problem", inspection)
+	}
+}
+
+func TestManagerInspectReportsCompatibilityOwnershipProblem(t *testing.T) {
+	manager, _, _ := testManager(t, []map[string]string{{"SKILL.md": "managed"}})
+	if err := manager.Add("unslop", "https://github.com/poteto/plugins"); err != nil {
+		t.Fatal(err)
+	}
+	compatibilityFile := filepath.Join(manager.compatibilityPath("unslop"), "SKILL.md")
+	if err := os.Remove(compatibilityFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(compatibilityFile, []byte("not a managed link"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	inspection, err := manager.Inspect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inspection) != 1 || inspection[0].State != InspectionProblem ||
+		!strings.Contains(inspection[0].Problem, "not an xoldot symlink") {
+		t.Errorf("inspection = %+v, want ownership problem", inspection)
+	}
+}
+
 func testManager(t *testing.T, versions []map[string]string) (Manager, *fakeRunner, string) {
 	t.Helper()
 	root := t.TempDir()

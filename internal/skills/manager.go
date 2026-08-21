@@ -65,6 +65,62 @@ type Manager struct {
 	Reporter          reportstatus.Reporter
 }
 
+type InspectionState string
+
+const (
+	InspectionCurrent InspectionState = "current"
+	InspectionProblem InspectionState = "problem"
+)
+
+type Inspection struct {
+	Name    string
+	State   InspectionState
+	Problem string
+}
+
+func (manager Manager) Inspect() ([]Inspection, error) {
+	catalog, err := Load(manager.CatalogPath)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(catalog.Skills, func(i, j int) bool {
+		return catalog.Skills[i].Name < catalog.Skills[j].Name
+	})
+
+	inspection := make([]Inspection, 0, len(catalog.Skills))
+	for _, skill := range catalog.Skills {
+		canonical := manager.canonicalPath(skill.Name)
+		compatibility := manager.compatibilityPath(skill.Name)
+		if err := validateManagedPaths(manager.ManagedHome, canonical, compatibility); err != nil {
+			return nil, err
+		}
+		if _, err := os.Lstat(compatibility); errors.Is(err, os.ErrNotExist) {
+			inspection = append(inspection, Inspection{
+				Name:    skill.Name,
+				State:   InspectionProblem,
+				Problem: fmt.Sprintf("skill %q is missing Claude compatibility path %s", skill.Name, compatibility),
+			})
+			continue
+		} else if err != nil {
+			return nil, fmt.Errorf("inspect Claude compatibility path %s: %w", compatibility, err)
+		}
+		if _, err := verifyOwnedSkill(skill, canonical, compatibility, manager.ManagedHome); err != nil {
+			var pathError *os.PathError
+			if errors.As(err, &pathError) && !errors.Is(err, os.ErrNotExist) {
+				return nil, err
+			}
+			inspection = append(inspection, Inspection{
+				Name:    skill.Name,
+				State:   InspectionProblem,
+				Problem: err.Error(),
+			})
+			continue
+		}
+		inspection = append(inspection, Inspection{Name: skill.Name, State: InspectionCurrent})
+	}
+	return inspection, nil
+}
+
 func (manager Manager) Add(name, source string) error {
 	if err := validateName(name); err != nil {
 		return err

@@ -33,6 +33,23 @@ type File struct {
 	Aliases []Alias `toml:"alias"`
 }
 
+type State string
+
+const (
+	StateCurrent     State = "current"
+	StateMissing     State = "missing"
+	StateReplaceable State = "replaceable"
+	StateConflict    State = "conflict"
+)
+
+type Inspection struct {
+	State    State
+	Path     string
+	Problem  string
+	existing []byte
+	desired  []byte
+}
+
 type Plan struct {
 	path       string
 	data       []byte
@@ -113,12 +130,31 @@ func Render(path, shell string, aliases []Alias) error {
 }
 
 func Prepare(path, shell string, aliases []Alias) (Plan, error) {
+	plan, inspection, err := buildPlan(path, shell, aliases)
+	if err != nil {
+		return Plan{}, err
+	}
+	if inspection.State == StateConflict {
+		return Plan{}, errors.New(inspection.Problem)
+	}
+	return plan, nil
+}
+
+func Inspect(path, shell string, aliases []Alias) (Inspection, error) {
+	_, inspection, err := buildPlan(path, shell, aliases)
+	if err != nil {
+		return Inspection{}, err
+	}
+	return inspection, nil
+}
+
+func buildPlan(path, shell string, aliases []Alias) (Plan, Inspection, error) {
 	if shell != "bash" && shell != "zsh" && shell != "fish" {
-		return Plan{}, fmt.Errorf("unsupported shell %q", shell)
+		return Plan{}, Inspection{}, fmt.Errorf("unsupported shell %q", shell)
 	}
 
 	if err := Validate(aliases); err != nil {
-		return Plan{}, err
+		return Plan{}, Inspection{}, err
 	}
 	aliases = append([]Alias(nil), aliases...)
 	sort.Slice(aliases, func(i, j int) bool {
@@ -137,59 +173,124 @@ func Prepare(path, shell string, aliases []Alias) (Plan, error) {
 	digest := sha256.Sum256(bodyData)
 	data := []byte(generatedHeader + digestPrefix + hex.EncodeToString(digest[:]) + "\n" + body.String())
 	legacyData := []byte(generatedHeader + body.String())
-	if _, err := validateOutput(path, data, legacyData); err != nil {
-		return Plan{}, err
+	inspection, err := inspectOutput(path, data, legacyData)
+	if err != nil {
+		return Plan{}, Inspection{}, err
 	}
-	return Plan{path: path, data: data, legacyData: legacyData}, nil
+	return Plan{path: path, data: data, legacyData: legacyData}, inspection, nil
 }
 
 func (plan Plan) Apply() error {
-	current, err := validateOutput(plan.path, plan.data, plan.legacyData)
+	inspection, err := inspectOutput(plan.path, plan.data, plan.legacyData)
 	if err != nil {
 		return err
 	}
-	if current {
+	if inspection.State == StateConflict {
+		return errors.New(inspection.Problem)
+	}
+	if inspection.State == StateCurrent {
 		return nil
 	}
 	return config.WriteFile(plan.path, plan.data, 0o644)
 }
 
-func validateOutput(path string, desired, legacyDesired []byte) (bool, error) {
+func inspectOutput(path string, desired, legacyDesired []byte) (Inspection, error) {
+	inspection := Inspection{Path: path}
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
+		inspection.State = StateMissing
+		return inspection, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("inspect alias output %s: %w", path, err)
+		return Inspection{}, fmt.Errorf("inspect alias output %s: %w", path, err)
 	}
 	if !info.Mode().IsRegular() {
-		return false, fmt.Errorf("alias output %s exists and is not managed by xoldot", path)
+		inspection.State = StateConflict
+		inspection.Problem = fmt.Sprintf("alias output %s exists and is not managed by xoldot", path)
+		return inspection, nil
 	}
 	existing, err := os.ReadFile(path)
 	if err != nil {
-		return false, fmt.Errorf("read alias output %s: %w", path, err)
+		return Inspection{}, fmt.Errorf("read alias output %s: %w", path, err)
 	}
 	if bytes.Equal(existing, desired) {
-		return true, nil
+		inspection.State = StateCurrent
+		return inspection, nil
 	}
 	if bytes.Equal(existing, legacyDesired) {
-		return false, nil
+		inspection.State = StateReplaceable
+		inspection.existing = existing
+		inspection.desired = desired
+		return inspection, nil
 	}
 	if !bytes.HasPrefix(existing, []byte(generatedHeader+digestPrefix)) {
-		return false, fmt.Errorf("alias output %s exists and is not managed by xoldot", path)
+		inspection.State = StateConflict
+		inspection.Problem = fmt.Sprintf("alias output %s exists and is not managed by xoldot", path)
+		return inspection, nil
 	}
 	digestEnd := bytes.IndexByte(existing[len(generatedHeader):], '\n')
 	if digestEnd < 0 {
-		return false, fmt.Errorf("alias output %s has local changes", path)
+		inspection.State = StateConflict
+		inspection.Problem = fmt.Sprintf("alias output %s has local changes", path)
+		return inspection, nil
 	}
 	digestEnd += len(generatedHeader)
 	wantDigest := strings.TrimPrefix(string(existing[len(generatedHeader):digestEnd]), digestPrefix)
 	body := existing[digestEnd+1:]
 	actualDigest := sha256.Sum256(body)
 	if wantDigest != hex.EncodeToString(actualDigest[:]) {
-		return false, fmt.Errorf("alias output %s has local changes", path)
+		inspection.State = StateConflict
+		inspection.Problem = fmt.Sprintf("alias output %s has local changes", path)
+		return inspection, nil
 	}
-	return false, nil
+	inspection.State = StateReplaceable
+	inspection.existing = existing
+	inspection.desired = desired
+	return inspection, nil
+}
+
+func (inspection Inspection) UnifiedDiff() string {
+	if inspection.State != StateReplaceable {
+		return ""
+	}
+	var output strings.Builder
+	fmt.Fprintf(&output, "--- %s\n", inspection.Path)
+	fmt.Fprintf(&output, "+++ %s (planned)\n", inspection.Path)
+	fmt.Fprintf(
+		&output,
+		"@@ -%s +%s @@\n",
+		diffRange(inspection.existing),
+		diffRange(inspection.desired),
+	)
+	writeDiffLines(&output, '-', inspection.existing)
+	writeDiffLines(&output, '+', inspection.desired)
+	return output.String()
+}
+
+func diffRange(data []byte) string {
+	lines := bytes.Count(data, []byte{'\n'})
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		lines++
+	}
+	if lines == 0 {
+		return "0,0"
+	}
+	return fmt.Sprintf("1,%d", lines)
+}
+
+func writeDiffLines(output *strings.Builder, prefix byte, data []byte) {
+	for len(data) > 0 {
+		lineEnd := bytes.IndexByte(data, '\n')
+		if lineEnd < 0 {
+			output.WriteByte(prefix)
+			output.Write(data)
+			output.WriteString("\n\\ No newline at end of file\n")
+			return
+		}
+		output.WriteByte(prefix)
+		output.Write(data[:lineEnd+1])
+		data = data[lineEnd+1:]
+	}
 }
 
 func Validate(aliases []Alias) error {
