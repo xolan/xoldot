@@ -73,8 +73,8 @@ func TestCompletionOffersCommandsFlagsAndApplyParts(t *testing.T) {
 		arguments []string
 		want      []string
 	}{
-		{name: "commands", arguments: []string{"__complete", ""}, want: []string{"apply", "completion"}},
-		{name: "flags", arguments: []string{"__complete", "apply", "--"}, want: []string{"--dry", "--only"}},
+		{name: "commands", arguments: []string{"__complete", ""}, want: []string{"apply", "completion", "restore"}},
+		{name: "flags", arguments: []string{"__complete", "apply", "--"}, want: []string{"--backup", "--dry", "--only"}},
 		{name: "apply parts", arguments: []string{"__complete", "apply", "--only", ""}, want: applyPartValues()},
 	}
 

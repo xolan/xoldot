@@ -106,6 +106,17 @@ A read-only diagnosis of whether a Configuration and Machine meet xoldot's
 operating requirements, with a remedy for each problem.
 _Avoid_: Status, because Doctor checks operating requirements rather than drift
 
+**Conflict backup**:
+An opt-in Apply result that preserves displaced managed home conflicts as one
+restorable set. A Conflict backup does not confer ownership over the preserved
+content.
+_Avoid_: Snapshot, force
+
+**Restore**:
+All-or-nothing replacement of the verified managed links from one Conflict
+backup with the user content that backup preserved.
+_Avoid_: Apply, partial restore
+
 **Sync**:
 Git synchronization of a Configuration repository. It commits Configuration
 changes, rebases from the configured remote branch when present, and pushes,

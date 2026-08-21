@@ -14,6 +14,7 @@ import (
 
 type machineInspection struct {
 	managedHome []managedhome.Entry
+	backups     []managedhome.BackupInspection
 	alias       aliases.Inspection
 	skills      []agentskills.Inspection
 	tools       int
@@ -111,6 +112,10 @@ func (a *app) inspectMachine(profile string) (machineInspection, error) {
 	if err != nil {
 		return machineInspection{}, err
 	}
+	backupInspection, err := managedhome.InspectBackups(inputs.paths.ManagedHome, inputs.home, inputs.paths.Root)
+	if err != nil {
+		return machineInspection{}, err
+	}
 	manager := agentskills.Manager{
 		CatalogPath: inputs.paths.Skills,
 		ManagedHome: inputs.paths.ManagedHome,
@@ -121,6 +126,7 @@ func (a *app) inspectMachine(profile string) (machineInspection, error) {
 	}
 	return machineInspection{
 		managedHome: managedHomeInspection.Entries(),
+		backups:     backupInspection,
 		alias:       aliasInspection,
 		skills:      skillInspection,
 		tools:       len(inputs.tools.Tools),
@@ -142,6 +148,12 @@ func (a *app) machineStatus(profile string) error {
 	}
 	for _, item := range inspection.managedHome {
 		if item.State == managedhome.StateConflict {
+			if item.EligibleForBackup {
+				if err := writef(a.output, "  eligible backup conflict %s: %s\n", item.Target, item.Problem); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := writef(a.output, "  conflict %s: %s\n", item.Target, item.Problem); err != nil {
 				return err
 			}
@@ -149,6 +161,22 @@ func (a *app) machineStatus(profile string) error {
 		}
 		if err := writef(a.output, "  %s %s -> %s\n", item.State, item.Target, item.Destination); err != nil {
 			return err
+		}
+	}
+	if len(inspection.backups) > 0 {
+		if err := write(a.output, "Backups:\n"); err != nil {
+			return err
+		}
+		for _, backup := range inspection.backups {
+			if backup.Problem == "" {
+				if err := writef(a.output, "  %s %s\n", backup.State, backup.ID); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := writef(a.output, "  %s %s: %s\n", backup.State, backup.ID, backup.Problem); err != nil {
+				return err
+			}
 		}
 	}
 	if inspection.alias.State == aliases.StateConflict {
