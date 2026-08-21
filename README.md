@@ -8,6 +8,7 @@ can be synchronized through Git.
 
 - [Get started](#get-started)
 - [Apply](#apply)
+- [Profiles](#profiles)
 - [Inspect before applying](#inspect-before-applying)
 - [Tools](#tools)
 - [Agent skills](#agent-skills)
@@ -38,9 +39,6 @@ Setup creates any missing files in this layout:
 │   └── home/
 └── tools.toml
 ```
-
-The `profiles/` directory is reserved for future use. Profiles are not
-implemented yet.
 
 Enter a Git remote URL when prompted to enable sync. Leave it blank to keep
 Git disabled. If the remote already has a `main` branch, setup checks it out
@@ -84,7 +82,61 @@ xoldot apply --only tools --dry
 The accepted values are exactly `tools`, `managed-home`, and `aliases`.
 Repeated values count once. Selected parts keep the default order, regardless
 of flag order. Beyond loading `xoldot.toml`, Apply reads, validates, changes,
-and reports only the selected parts. `--dry` previews the same selection.
+and reports only the selected parts when no Profile is selected. `--dry`
+previews the same selection.
+
+## Profiles
+
+A Profile selects an explicit subset of one Configuration. Put each Profile in
+`profiles/<name>.toml`, then pass its name to Apply, Status, or Diff:
+
+```sh
+xoldot apply --profile work
+xoldot apply --profile work --only tools --only managed-home
+xoldot apply --profile work --dry
+xoldot status --profile work
+xoldot diff --profile work
+```
+
+Profile names start and end with a letter or number. Between them, they may
+also use underscores and hyphens. Names are case-insensitive and normalize to
+lowercase, so `Work.toml` and `work.toml` conflict. A command selects one leaf
+Profile. With no `--profile`, these commands use the complete Configuration as
+before.
+
+A Profile can select exact catalog names and clean paths relative to
+`files/home`:
+
+```toml
+extends = ["base", "development"]
+tools = ["git", "ripgrep"]
+aliases = ["ll", "gs"]
+skills = ["unslop"]
+managed_home = [".gitconfig", ".config/git"]
+```
+
+`extends` may name more than one parent and may span multiple levels. The
+result is the union of the leaf and every reachable parent. Parent order does
+not affect the result. Profiles have no exclusions, overrides, variables, or
+templates.
+
+Tool, Alias, and Skill entries must match names already declared in their
+catalogs. A managed-home entry must already exist, must stay within
+`files/home`, and cannot contain redundant path components. Selecting a file
+selects that file. Selecting a directory selects every file below it.
+
+Selecting a Skill also selects its canonical files under `.agents/skills`, its
+Claude compatibility files under `.claude/skills`, and its Companion agents
+under `.agents/agents` and `.claude/agents`. The four namespace roots are
+reserved. A Profile cannot name a reserved root, a parent of one, or any path
+below one through `managed_home`; select the Skill by catalog name instead.
+
+xoldot validates every Profile, inheritance edge, catalog reference, and
+managed-home member before a selected Profile can change the Machine. Missing
+parents, cycles, normalized-name collisions, unknown members, and unsafe paths
+are errors. Profile validation reads the complete Tool, Alias, and Skill
+catalogs even when `--only` narrows Apply. Selection then filters the
+Configuration before the existing Apply, Status, and Diff planners run.
 
 ## Inspect before applying
 
@@ -286,7 +338,8 @@ xoldot sync
 
 Sync commits local changes as `xoldot sync`, pulls the configured branch with
 rebase, and pushes it. Git provides the author identity and remote
-authentication.
+authentication. Sync always synchronizes the complete Configuration repository
+and does not select a Profile.
 
 Preview inspection, adoption, Apply, or Sync without changing anything:
 
@@ -333,7 +386,8 @@ to install it.
 - `NO_COLOR` or `TERM=dumb` disables color.
 
 Conflict backup or force modes and shells other than Bash, Zsh, and Fish are
-not supported yet.
+not supported yet. Profiles cannot select themselves from a hostname,
+operating system, distribution, architecture, or environment value.
 
 ## Development
 

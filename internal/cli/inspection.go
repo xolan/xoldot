@@ -11,7 +11,6 @@ import (
 	"github.com/xolan/xoldot/internal/config"
 	"github.com/xolan/xoldot/internal/managedhome"
 	agentskills "github.com/xolan/xoldot/internal/skills"
-	toolcatalog "github.com/xolan/xoldot/internal/tools"
 )
 
 type machineInspection struct {
@@ -22,37 +21,42 @@ type machineInspection struct {
 }
 
 type machineInputs struct {
+	configurationInput
 	paths     config.Paths
-	tools     toolcatalog.Catalog
 	home      string
 	shell     string
-	aliasFile aliases.File
 	aliasPath string
 }
 
 func (a *app) statusCommand() *cobra.Command {
-	return &cobra.Command{
+	var profile string
+	command := &cobra.Command{
 		Use:   "status",
 		Short: "Inspect the current machine without changing it",
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
-			return a.machineStatus()
+			return a.machineStatus(profile)
 		},
 	}
+	command.Flags().StringVar(&profile, "profile", "", "inspect one selected profile")
+	return command
 }
 
 func (a *app) diffCommand() *cobra.Command {
-	return &cobra.Command{
+	var profile string
+	command := &cobra.Command{
 		Use:   "diff",
 		Short: "Show managed home and alias changes without applying them",
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
-			return a.machineDiff()
+			return a.machineDiff(profile)
 		},
 	}
+	command.Flags().StringVar(&profile, "profile", "", "show changes for one selected profile")
+	return command
 }
 
-func (a *app) loadMachineInputs() (machineInputs, error) {
+func (a *app) loadMachineInputs(profile string) (machineInputs, error) {
 	paths, err := a.paths()
 	if err != nil {
 		return machineInputs{}, err
@@ -61,7 +65,7 @@ func (a *app) loadMachineInputs() (machineInputs, error) {
 	if err != nil {
 		return machineInputs{}, err
 	}
-	catalog, err := toolcatalog.Load(paths.Tools)
+	input, err := loadConfigurationInput(paths, profile, configurationNeeds{tools: true, aliases: true, skills: true})
 	if err != nil {
 		return machineInputs{}, err
 	}
@@ -81,38 +85,39 @@ func (a *app) loadMachineInputs() (machineInputs, error) {
 	if err != nil {
 		return machineInputs{}, err
 	}
-	file, err := aliases.Load(paths.Aliases)
-	if err != nil {
-		return machineInputs{}, err
-	}
 	aliasPath := filepath.Join(aliasDir, "alias."+shell)
 	return machineInputs{
-		paths:     paths,
-		tools:     catalog,
-		home:      home,
-		shell:     shell,
-		aliasFile: file,
-		aliasPath: aliasPath,
+		configurationInput: input,
+		paths:              paths,
+		home:               home,
+		shell:              shell,
+		aliasPath:          aliasPath,
 	}, nil
 }
 
-func (a *app) inspectMachine() (machineInspection, error) {
-	inputs, err := a.loadMachineInputs()
+func (a *app) inspectMachine(profile string) (machineInspection, error) {
+	inputs, err := a.loadMachineInputs(profile)
 	if err != nil {
 		return machineInspection{}, err
 	}
-	aliasInspection, err := aliases.Inspect(inputs.aliasPath, inputs.shell, inputs.aliasFile.Aliases)
+	aliasInspection, err := aliases.Inspect(inputs.aliasPath, inputs.shell, inputs.aliases.Aliases)
 	if err != nil {
 		return machineInspection{}, err
 	}
-	managedHomeInspection, err := managedhome.Inspect(inputs.paths.ManagedHome, inputs.home, inputs.paths.Root)
+	managedHomeInspection, err := managedhome.InspectSelected(
+		inputs.paths.ManagedHome,
+		inputs.home,
+		inputs.paths.Root,
+		inputs.managedHomeFilter,
+	)
 	if err != nil {
 		return machineInspection{}, err
 	}
-	skillInspection, err := (agentskills.Manager{
+	manager := agentskills.Manager{
 		CatalogPath: inputs.paths.Skills,
 		ManagedHome: inputs.paths.ManagedHome,
-	}).Inspect()
+	}
+	skillInspection, err := manager.InspectCatalog(inputs.skills)
 	if err != nil {
 		return machineInspection{}, err
 	}
@@ -124,8 +129,8 @@ func (a *app) inspectMachine() (machineInspection, error) {
 	}, nil
 }
 
-func (a *app) machineStatus() error {
-	inspection, err := a.inspectMachine()
+func (a *app) machineStatus(profile string) error {
+	inspection, err := a.inspectMachine(profile)
 	if err != nil {
 		return err
 	}
@@ -186,8 +191,8 @@ func (a *app) machineStatus() error {
 	)
 }
 
-func (a *app) machineDiff() error {
-	inspection, err := a.inspectMachine()
+func (a *app) machineDiff(profile string) error {
+	inspection, err := a.inspectMachine(profile)
 	if err != nil {
 		return err
 	}

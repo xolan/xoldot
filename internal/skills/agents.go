@@ -298,7 +298,7 @@ func referencesAgent(skill, agent []byte, relative string) bool {
 
 func ownedAgents(skill Skill, canonical, managedHome string) ([]string, error) {
 	if len(skill.Agents) > 0 {
-		return validateOwnedAgentLinks(canonicalAgentsRoot(managedHome), skill.Agents, managedHome)
+		return validateOwnedAgentLinks(canonicalAgentsPath(managedHome), skill.Agents, managedHome)
 	}
 	root := filepath.Join(canonical, legacyManagedAgentsDirectory)
 	if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
@@ -397,16 +397,4 @@ func (manager Manager) validateNewAgentPaths(candidate stagedSkill, previous []s
 		return nil
 	}
 	return validateManagedPaths(manager.ManagedHome, paths...)
-}
-
-func claudeAgentPath(managedHome, relative string) string {
-	return filepath.Join(managedHome, ".claude", "agents", filepath.FromSlash(relative))
-}
-
-func canonicalAgentPath(managedHome, relative string) string {
-	return filepath.Join(canonicalAgentsRoot(managedHome), filepath.FromSlash(relative))
-}
-
-func canonicalAgentsRoot(managedHome string) string {
-	return filepath.Join(managedHome, ".agents", "agents")
 }

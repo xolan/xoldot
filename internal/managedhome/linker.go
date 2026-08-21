@@ -10,6 +10,7 @@ import (
 	"sort"
 
 	"github.com/xolan/xoldot/internal/pathutil"
+	agentskills "github.com/xolan/xoldot/internal/skills"
 	reportstatus "github.com/xolan/xoldot/internal/status"
 )
 
@@ -51,6 +52,8 @@ func (entry Entry) PlanDescription() string {
 type Inspection struct {
 	entries []Entry
 }
+
+type PathFilter func(relative string) bool
 
 func (inspection Inspection) Entries() []Entry {
 	return append([]Entry(nil), inspection.entries...)
@@ -116,7 +119,11 @@ func Link(managedRoot, home, configRoot string, reporter reportstatus.Reporter, 
 }
 
 func Prepare(managedRoot, home, configRoot string) (Plan, error) {
-	plan, err := prepare(managedRoot, home, configRoot)
+	return PrepareSelected(managedRoot, home, configRoot, nil)
+}
+
+func PrepareSelected(managedRoot, home, configRoot string, include PathFilter) (Plan, error) {
+	plan, err := prepare(managedRoot, home, configRoot, include)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -127,14 +134,18 @@ func Prepare(managedRoot, home, configRoot string) (Plan, error) {
 }
 
 func Inspect(managedRoot, home, configRoot string) (Inspection, error) {
-	plan, err := prepare(managedRoot, home, configRoot)
+	return InspectSelected(managedRoot, home, configRoot, nil)
+}
+
+func InspectSelected(managedRoot, home, configRoot string, include PathFilter) (Inspection, error) {
+	plan, err := prepare(managedRoot, home, configRoot, include)
 	if err != nil {
 		return Inspection{}, err
 	}
 	return plan.inspection(), nil
 }
 
-func prepare(managedRoot, home, configRoot string) (Plan, error) {
+func prepare(managedRoot, home, configRoot string, include PathFilter) (Plan, error) {
 	layout, err := newManagedHomeLayout(managedRoot, home, configRoot)
 	if err != nil {
 		return Plan{}, err
@@ -159,8 +170,18 @@ func prepare(managedRoot, home, configRoot string) (Plan, error) {
 		if walkErr != nil {
 			return walkErr
 		}
-		skillDirectory := entry.IsDir() && isSkillDirectory(managedRoot, source)
+		relative, err := filepath.Rel(managedRoot, source)
+		if err != nil {
+			return fmt.Errorf("find path for %s: %w", source, err)
+		}
+		skillDirectory := entry.IsDir() && agentskills.IsManagedSkillDirectory(relative)
 		if entry.IsDir() && !skillDirectory {
+			return nil
+		}
+		if include != nil && !include(relative) {
+			if skillDirectory {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if skillDirectory {
@@ -170,10 +191,6 @@ func prepare(managedRoot, home, configRoot string) (Plan, error) {
 		}
 		isSymlink := entry.Type()&os.ModeSymlink != 0
 
-		relative, err := filepath.Rel(managedRoot, source)
-		if err != nil {
-			return fmt.Errorf("find path for %s: %w", source, err)
-		}
 		target := filepath.Join(home, relative)
 		if layout.reservedTarget(target) {
 			return fmt.Errorf("managed path %s is reserved for xoldot link state", source)
@@ -485,12 +502,6 @@ func (plan Plan) removeTargetSymlink(
 	return transaction.removeSymlink(homeRoot, relative, record.Target, record.Destination)
 }
 
-func isSkillDirectory(managedRoot, path string) bool {
-	parent := filepath.Dir(path)
-	return parent == filepath.Join(managedRoot, ".agents", "skills") ||
-		parent == filepath.Join(managedRoot, ".claude", "skills")
-}
-
 func validateSkillDirectory(root, managedRoot string) error {
 	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -630,7 +641,17 @@ func mappedSymlinkDestination(source, target, managedRoot, home, configRoot stri
 		return "", fmt.Errorf("resolve target for managed symlink %s: %w", source, err)
 	}
 	resolvedTargetDestination := filepath.Join(resolvedParent, filepath.Base(targetDestination))
-	if pathutil.Contains(configRoot, resolvedTargetDestination) || pathutil.Contains(resolvedTargetDestination, managedRoot) {
+	if pathutil.Contains(configRoot, resolvedTargetDestination) {
+		ownedPrefix, err := targetUsesManagedPrefix(targetDestination, home, managedRoot)
+		if err != nil {
+			return "", err
+		}
+		if !ownedPrefix {
+			return "", fmt.Errorf("refusing recursive managed symlink %s -> %s", target, targetDestination)
+		}
+		resolvedTargetDestination = targetDestination
+	}
+	if pathutil.Contains(resolvedTargetDestination, managedRoot) {
 		return "", fmt.Errorf("refusing recursive managed symlink %s -> %s", target, targetDestination)
 	}
 	resolvedLinkParent, err := pathutil.ResolveExistingPrefix(filepath.Dir(target))
@@ -642,6 +663,26 @@ func mappedSymlinkDestination(source, target, managedRoot, home, configRoot stri
 		return "", fmt.Errorf("make target symlink for %s: %w", target, err)
 	}
 	return linkDestination, nil
+}
+
+func targetUsesManagedPrefix(target, home, managedRoot string) (bool, error) {
+	for current := filepath.Dir(target); current != home; current = filepath.Dir(current) {
+		if !pathutil.Contains(home, current) {
+			return false, nil
+		}
+		relative, err := filepath.Rel(home, current)
+		if err != nil {
+			return false, fmt.Errorf("map managed target prefix %s: %w", current, err)
+		}
+		owned, err := exactSymlink(current, filepath.Join(managedRoot, relative))
+		if err != nil {
+			return false, err
+		}
+		if owned {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func managedFileSymlinkDestination(source, managedRoot string) (string, error) {
