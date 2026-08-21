@@ -16,6 +16,7 @@ type configurationNeeds struct {
 }
 
 type configurationInput struct {
+	profile           string
 	tools             toolcatalog.Catalog
 	aliases           aliases.File
 	skills            agentskills.Catalog
@@ -29,6 +30,7 @@ func loadConfigurationInput(paths config.Paths, profile string, needs configurat
 			return configurationInput{}, err
 		}
 		return configurationInput{
+			profile:           selected.Name,
 			tools:             selected.Tools,
 			aliases:           selected.Aliases,
 			skills:            selected.Skills,

@@ -1,13 +1,14 @@
 # xoldot
 
-`xoldot` manages tools, shell aliases, agent skills, and files linked into your
-home directory. Its configuration lives in `~/.config/xoldot` by default and
-can be synchronized through Git.
+`xoldot` manages tools, shell aliases, agent skills, lifecycle scripts, and
+files linked into your home directory. Its configuration lives in
+`~/.config/xoldot` by default and can be synchronized through Git.
 
 ## Table of contents
 
 - [Get started](#get-started)
 - [Apply](#apply)
+- [Lifecycle scripts](#lifecycle-scripts)
 - [Profiles](#profiles)
 - [Inspect before applying](#inspect-before-applying)
 - [Troubleshoot](#troubleshoot)
@@ -38,6 +39,9 @@ Setup creates any missing files in this layout:
 ├── files/
 │   ├── aliases.toml
 │   └── home/
+├── scripts/
+│   ├── before-apply/
+│   └── after-apply/
 └── tools.toml
 ```
 
@@ -86,6 +90,62 @@ Repeated values count once. Selected parts keep the default order, regardless
 of flag order. Beyond loading `xoldot.toml`, Apply reads, validates, changes,
 and reports only the selected parts when no Profile is selected. `--dry`
 previews the same selection.
+
+Lifecycle scripts wrap the selected parts. Eligible before scripts run after
+every selected part has prepared successfully, then the selected parts run in
+their normal order, followed by eligible after scripts. An Apply with no
+lifecycle scripts behaves as before. Tool check commands run after the before
+scripts, immediately before Tool installation decisions.
+
+## Lifecycle scripts
+
+Put executable files in `scripts/before-apply/` or `scripts/after-apply/`.
+The filename selects when xoldot runs each script:
+
+- `run_` runs on every Apply.
+- `run_once_` runs until that relative script path succeeds once.
+- `run_onchange_` runs when its content digest differs from its last successful
+  run.
+
+Within each phase, xoldot runs eligible scripts in bytewise filename order.
+It executes each file directly, so the file needs a working shebang and at
+least one executable permission bit. Directories, non-executable files,
+unknown filename prefixes, and symlinks that leave `scripts/` are preparation
+errors. A symlink may target an executable file elsewhere below `scripts/`.
+At execution time, xoldot reopens the prepared target beneath `scripts/`,
+verifies its identity and content, and executes that verified open file.
+
+Scripts inherit standard input, output, and error. xoldot replaces these
+environment values for each invocation:
+
+```text
+XOLDOT=1
+XOLDOT_CONFIG_DIR=/absolute/configuration/path
+XOLDOT_TARGET_HOME=/absolute/target/home
+XOLDOT_APPLY_COMPONENTS=tools,managed-home,aliases
+XOLDOT_PROFILE=work
+```
+
+`XOLDOT_APPLY_COMPONENTS` lists the selected Apply parts in their canonical
+order, separated by commas. `XOLDOT_PROFILE` is present only when Apply selects
+a Profile, and its value is the Profile's normalized lowercase name. Scripts
+belong to the complete Configuration and are not filtered by a Profile.
+
+xoldot records successful `run_once_` and `run_onchange_` scripts in
+`~/.local/state/xoldot/scripts.json`. It writes one successful result at a
+time. For each stateful script, xoldot holds `scripts.lock` while it reloads
+eligibility, runs the script, and records success. Concurrent Apply processes
+serialize these attempts. A waiting process rechecks eligibility and skips a
+script after the prior process records success. A failed script does not
+advance its state. A failed before script stops Apply before any selected part
+changes the Machine. A failed after script returns an error but does not undo
+completed Apply work.
+
+Lifecycle scripts are trusted executable Configuration content. Keep `run_`
+scripts idempotent. After scripts should also tolerate a retry when an earlier
+attempt completed its Machine work but failed before recording other state.
+Lifecycle scripts do not have dependencies, parallel execution, retries,
+timeouts, templates, or automatic rollback.
 
 ## Profiles
 
@@ -168,6 +228,8 @@ Status counts declared Tools as unchecked. It does not run their `check`
 commands because those commands are user-authored shell code. It also does not
 run install commands, `npx`, Git operations, or lifecycle scripts.
 
+When lifecycle scripts are eligible, Status lists them as work that would run.
+
 Show only the pending managed home and Alias work:
 
 ```sh
@@ -177,7 +239,8 @@ xoldot diff
 Diff prints the link additions and removals that a dry Apply would plan. For an
 owned Alias file that needs replacement, it prints a unified text diff. Missing
 Alias output is reported as a planned creation. Content that xoldot cannot
-safely replace is reported as a conflict.
+safely replace is reported as a conflict. Diff also reports eligible lifecycle
+scripts in before and after phase order.
 
 Both commands are read-only. They do not create the Target home, state
 directories, or output files. Drift and conflicts are successful inspection
@@ -379,6 +442,10 @@ xoldot creates parent directories when it links managed files. It will not
 replace an existing file or a symlink that points somewhere else. If you remove
 a managed file, the next Apply that includes `managed-home` removes its old
 home link only when that link still points to the managed location.
+xoldot's `links.json`, `links.lock`, `scripts.json`, and `scripts.lock` state
+files, plus its `backups/` tree, cannot be declared as managed home content.
+The lock paths must remain ordinary files. xoldot keeps them private with
+`0600` permissions and refuses symlinks or special files in their place.
 
 ### Conflict backup and restore
 
@@ -453,6 +520,8 @@ dry Apply also describes what each selected Tool check and installation would
 do. A dry backup reports eligible conflicts and refuses directories, special
 files, and paths outside the Target home without writing state. Dry restore
 checks the same all-or-nothing preconditions as restore and changes nothing.
+Dry Apply also reports eligible lifecycle scripts in execution order without
+running them or writing script state.
 
 ## Shell completion
 

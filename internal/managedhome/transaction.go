@@ -2,12 +2,12 @@ package managedhome
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/xolan/xoldot/internal/machinestate"
 )
 
 type journalEntry struct {
@@ -777,9 +777,9 @@ func exactRootSymlink(root *os.Root, relative, destination string) (bool, error)
 }
 
 func randomTransactionName(prefix string) (string, error) {
-	var random [12]byte
-	if _, err := rand.Read(random[:]); err != nil {
+	name, err := machinestate.RandomName(prefix)
+	if err != nil {
 		return "", fmt.Errorf("generate transaction path: %w", err)
 	}
-	return prefix + hex.EncodeToString(random[:]), nil
+	return name, nil
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/xolan/xoldot/internal/aliases"
 	"github.com/xolan/xoldot/internal/config"
+	"github.com/xolan/xoldot/internal/lifecyclescripts"
 	"github.com/xolan/xoldot/internal/managedhome"
 	"github.com/xolan/xoldot/internal/status"
 	toolcatalog "github.com/xolan/xoldot/internal/tools"
@@ -39,6 +40,20 @@ type applySelection struct {
 	aliases     bool
 }
 
+func (selection applySelection) values() []string {
+	values := make([]string, 0, len(applyParts))
+	if selection.tools {
+		values = append(values, string(applyPartTools))
+	}
+	if selection.managedHome {
+		values = append(values, string(applyPartManagedHome))
+	}
+	if selection.aliases {
+		values = append(values, string(applyPartAliases))
+	}
+	return values
+}
+
 func parseApplySelection(values []string) (applySelection, error) {
 	if len(values) == 0 {
 		return applySelection{tools: true, managedHome: true, aliases: true}, nil
@@ -66,9 +81,10 @@ func parseApplySelection(values []string) (applySelection, error) {
 
 type applyPlan struct {
 	selection   applySelection
-	tools       toolcatalog.Catalog
+	tools       toolcatalog.Plan
 	managedHome managedhome.Plan
 	aliases     aliases.Plan
+	scripts     lifecyclescripts.Plan
 	aliasPath   string
 }
 
@@ -128,7 +144,11 @@ func (a *app) apply(dry, backup bool, selection applySelection, profile string) 
 	if err != nil {
 		return err
 	}
-	plan, err := prepareApply(paths, cfg, selection, input, backup)
+	scripts, err := lifecyclescripts.Load(paths.Root, paths.Scripts)
+	if err != nil {
+		return err
+	}
+	plan, err := prepareApply(paths, cfg, selection, input, backup, scripts, dry)
 	if err != nil {
 		var refusal *managedhome.PreparationRefusal
 		if dry && errors.As(err, &refusal) {
@@ -147,16 +167,26 @@ func prepareApply(
 	selection applySelection,
 	input configurationInput,
 	backup bool,
+	scripts lifecyclescripts.Catalog,
+	dry bool,
 ) (applyPlan, error) {
 	plan := applyPlan{selection: selection}
 	var err error
-	if selection.tools {
-		plan.tools = input.tools
-	}
 
 	var home string
-	if selection.managedHome || selection.aliases {
+	if selection.managedHome || selection.aliases || !scripts.Empty() {
 		home, err = config.TargetHome()
+		if err != nil {
+			return applyPlan{}, err
+		}
+	}
+	if !scripts.Empty() {
+		plan.scripts, err = scripts.Prepare(lifecyclescripts.Environment{
+			ConfigDir:  paths.Root,
+			TargetHome: home,
+			Components: strings.Join(selection.values(), ","),
+			Profile:    input.profile,
+		})
 		if err != nil {
 			return applyPlan{}, err
 		}
@@ -199,12 +229,25 @@ func prepareApply(
 			return applyPlan{}, err
 		}
 	}
+	if selection.tools {
+		plan.tools, err = toolcatalog.Prepare(input.tools, toolcatalog.CurrentPlatform(), dry)
+		if err != nil {
+			return applyPlan{}, err
+		}
+	}
 	return plan, nil
 }
 
 func (a *app) executeApply(plan applyPlan, dry bool) error {
+	if dry {
+		if err := plan.scripts.Preview(lifecyclescripts.BeforeApply, a.reporter); err != nil {
+			return err
+		}
+	} else if err := plan.scripts.Run(lifecyclescripts.BeforeApply, a.input, a.output, a.errorOutput, a.reporter); err != nil {
+		return err
+	}
 	if plan.selection.tools {
-		if err := toolcatalog.Apply(plan.tools, toolcatalog.CurrentPlatform(), a.input, a.output, a.errorOutput, a.reporter, dry); err != nil {
+		if err := plan.tools.Apply(a.input, a.output, a.errorOutput, a.reporter); err != nil {
 			return err
 		}
 	}
@@ -238,14 +281,22 @@ func (a *app) executeApply(plan applyPlan, dry bool) error {
 			}
 		}
 	}
-	if !plan.selection.aliases {
-		return nil
+	if plan.selection.aliases {
+		if dry {
+			if err := a.reportf(status.Progress, "Would render aliases to %s", plan.aliasPath); err != nil {
+				return err
+			}
+		} else {
+			if err := plan.aliases.Apply(); err != nil {
+				return err
+			}
+			if err := a.reportf(status.Success, "Rendered aliases to %s", plan.aliasPath); err != nil {
+				return err
+			}
+		}
 	}
 	if dry {
-		return a.reportf(status.Progress, "Would render aliases to %s", plan.aliasPath)
+		return plan.scripts.Preview(lifecyclescripts.AfterApply, a.reporter)
 	}
-	if err := plan.aliases.Apply(); err != nil {
-		return err
-	}
-	return a.reportf(status.Success, "Rendered aliases to %s", plan.aliasPath)
+	return plan.scripts.Run(lifecyclescripts.AfterApply, a.input, a.output, a.errorOutput, a.reporter)
 }

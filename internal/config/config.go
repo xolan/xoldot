@@ -24,6 +24,7 @@ type Paths struct {
 	Aliases     string
 	Skills      string
 	Profiles    string
+	Scripts     string
 	ManagedHome string
 }
 
@@ -89,12 +90,20 @@ func NewPaths(root string) Paths {
 		Aliases:     filepath.Join(root, "files", "aliases.toml"),
 		Skills:      filepath.Join(root, "skills.toml"),
 		Profiles:    filepath.Join(root, "profiles"),
+		Scripts:     filepath.Join(root, "scripts"),
 		ManagedHome: filepath.Join(root, "files", "home"),
 	}
 }
 
 func Initialize(paths Paths) error {
-	for _, dir := range []string{paths.Root, paths.Profiles, paths.ManagedHome, filepath.Dir(paths.Aliases)} {
+	for _, dir := range []string{
+		paths.Root,
+		paths.Profiles,
+		filepath.Join(paths.Scripts, "before-apply"),
+		filepath.Join(paths.Scripts, "after-apply"),
+		paths.ManagedHome,
+		filepath.Dir(paths.Aliases),
+	} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create %s: %w", dir, err)
 		}

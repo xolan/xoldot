@@ -641,12 +641,68 @@ func TestLinkRejectsLedgerTargetsOutsideHome(t *testing.T) {
 	}
 }
 
-func TestLinkReservesItsLedgerPath(t *testing.T) {
+func TestLinkReservesXoldotStateFiles(t *testing.T) {
+	for _, name := range []string{"links.json", "links.lock", "scripts.json", "scripts.lock"} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			managed := filepath.Join(root, "managed")
+			home := filepath.Join(root, "home")
+			configRoot := filepath.Join(root, "config")
+			source := filepath.Join(managed, ".local", "state", "xoldot", name)
+			if err := os.MkdirAll(filepath.Dir(source), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(source, []byte("managed"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(configRoot, 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := Link(managed, home, configRoot, discardReporter, false); err == nil || !strings.Contains(err.Error(), "reserved") {
+				t.Fatalf("Link() error = %v, want reserved path error", err)
+			}
+		})
+	}
+}
+
+func TestOpenLockedHomeRejectsSymlinkedLedgerLock(t *testing.T) {
 	root := t.TempDir()
 	managed := filepath.Join(root, "managed")
 	home := filepath.Join(root, "home")
 	configRoot := filepath.Join(root, "config")
-	source := filepath.Join(managed, ".local", "state", "xoldot", "links.json")
+	for _, directory := range []string{managed, home, configRoot} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lock := filepath.Join(home, filepath.FromSlash(lockRelativePath))
+	if err := os.MkdirAll(filepath.Dir(lock), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(lock), "other.lock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("other.lock", lock); err != nil {
+		t.Fatal(err)
+	}
+
+	layout, err := newManagedHomeLayout(managed, home, configRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = layout.openLockedHome(linkLedger{Version: 1})
+	if err == nil || !strings.Contains(err.Error(), "managed link state lock") || !strings.Contains(err.Error(), "not an ordinary file") {
+		t.Fatalf("openLockedHome() error = %v, want state-lock type error", err)
+	}
+}
+
+func TestLinkAllowsOtherFilesInXoldotStateDirectory(t *testing.T) {
+	root := t.TempDir()
+	managed := filepath.Join(root, "managed")
+	home := filepath.Join(root, "home")
+	configRoot := filepath.Join(root, "config")
+	source := filepath.Join(managed, ".local", "state", "xoldot", "other-state")
 	if err := os.MkdirAll(filepath.Dir(source), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -657,8 +713,8 @@ func TestLinkReservesItsLedgerPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Link(managed, home, configRoot, discardReporter, false); err == nil || !strings.Contains(err.Error(), "reserved") {
-		t.Fatalf("Link() error = %v, want reserved path error", err)
+	if _, err := Link(managed, home, configRoot, discardReporter, false); err != nil {
+		t.Fatalf("Link() error = %v", err)
 	}
 }
 

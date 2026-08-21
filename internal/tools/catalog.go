@@ -40,6 +40,18 @@ type Platform struct {
 	Shell    string
 }
 
+type installPlan struct {
+	tool    Tool
+	command string
+}
+
+type Plan struct {
+	catalog  Catalog
+	platform Platform
+	shell    string
+	dry      bool
+}
+
 func Load(path string) (Catalog, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -160,24 +172,31 @@ func Apply(
 	reporter reportstatus.Reporter,
 	dry bool,
 ) error {
-	if err := Validate(catalog); err != nil {
+	plan, err := Prepare(catalog, platform, dry)
+	if err != nil {
 		return err
+	}
+	return plan.Apply(stdin, stdout, stderr, reporter)
+}
+
+func Prepare(catalog Catalog, platform Platform, dry bool) (Plan, error) {
+	if err := Validate(catalog); err != nil {
+		return Plan{}, err
 	}
 	shell := platform.Shell
 	if shell == "" {
 		shell = "/bin/sh"
 	}
-	if dry {
-		return preview(catalog, platform, reporter)
-	}
+	return Plan{catalog: catalog, platform: platform, shell: shell, dry: dry}, nil
+}
 
-	type installPlan struct {
-		tool    Tool
-		command string
+func (plan Plan) Apply(stdin io.Reader, stdout, stderr io.Writer, reporter reportstatus.Reporter) error {
+	if plan.dry {
+		return preview(plan.catalog, plan.platform, reporter)
 	}
-	var missing []Tool
-	for _, tool := range catalog.Tools {
-		if commandPasses(shell, tool.Check) {
+	missing := make([]Tool, 0, len(plan.catalog.Tools))
+	for _, tool := range plan.catalog.Tools {
+		if commandPasses(plan.shell, tool.Check) {
 			if err := reportf(reporter, "Tool %s is already installed", tool.Name); err != nil {
 				return err
 			}
@@ -185,27 +204,27 @@ func Apply(
 		}
 		missing = append(missing, tool)
 	}
-	plans := make([]installPlan, 0, len(missing))
+	installations := make([]installPlan, 0, len(missing))
 	for _, tool := range missing {
-		command, err := tool.InstallCommand(platform)
+		command, err := tool.InstallCommand(plan.platform)
 		if err != nil {
 			return err
 		}
-		plans = append(plans, installPlan{tool: tool, command: command})
+		installations = append(installations, installPlan{tool: tool, command: command})
 	}
-	for _, plan := range plans {
-		if err := reportf(reporter, "Installing tool %s", plan.tool.Name); err != nil {
+	for _, installation := range installations {
+		if err := reportf(reporter, "Installing tool %s", installation.tool.Name); err != nil {
 			return err
 		}
-		command := exec.Command(shell, "-c", plan.command)
+		command := exec.Command(plan.shell, "-c", installation.command)
 		command.Stdin = stdin
 		command.Stdout = stdout
 		command.Stderr = stderr
 		if err := command.Run(); err != nil {
-			return fmt.Errorf("install tool %q: %w", plan.tool.Name, err)
+			return fmt.Errorf("install tool %q: %w", installation.tool.Name, err)
 		}
-		if !commandPasses(shell, plan.tool.Check) {
-			return fmt.Errorf("tool %q still fails its check after installation", plan.tool.Name)
+		if !commandPasses(plan.shell, installation.tool.Check) {
+			return fmt.Errorf("tool %q still fails its check after installation", installation.tool.Name)
 		}
 	}
 	return nil

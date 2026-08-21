@@ -93,7 +93,7 @@ func PrepareAdoption(source, managedRoot, home, configRoot string) (AdoptionPlan
 		return AdoptionPlan{}, fmt.Errorf("managed destination %s resolves outside the managed home %s", destination, layout.ManagedRoot)
 	}
 	if layout.reservedTarget(source) {
-		return AdoptionPlan{}, fmt.Errorf("target %s is reserved for xoldot link state", source)
+		return AdoptionPlan{}, fmt.Errorf("target %s is reserved for xoldot state", source)
 	}
 
 	previous, err := layout.loadLedger()

@@ -8,16 +8,19 @@ import (
 
 	"github.com/xolan/xoldot/internal/aliases"
 	"github.com/xolan/xoldot/internal/config"
+	"github.com/xolan/xoldot/internal/lifecyclescripts"
 	"github.com/xolan/xoldot/internal/managedhome"
 	agentskills "github.com/xolan/xoldot/internal/skills"
 )
 
 type machineInspection struct {
-	managedHome []managedhome.Entry
-	backups     []managedhome.BackupInspection
-	alias       aliases.Inspection
-	skills      []agentskills.Inspection
-	tools       int
+	managedHome   []managedhome.Entry
+	backups       []managedhome.BackupInspection
+	alias         aliases.Inspection
+	skills        []agentskills.Inspection
+	beforeScripts []lifecyclescripts.Entry
+	afterScripts  []lifecyclescripts.Entry
+	tools         int
 }
 
 type machineInputs struct {
@@ -26,6 +29,7 @@ type machineInputs struct {
 	home      string
 	shell     string
 	aliasPath string
+	scripts   lifecyclescripts.Inspection
 }
 
 func (a *app) statusCommand() *cobra.Command {
@@ -46,7 +50,7 @@ func (a *app) diffCommand() *cobra.Command {
 	var profile string
 	command := &cobra.Command{
 		Use:   "diff",
-		Short: "Show managed home and alias changes without applying them",
+		Short: "Show managed home, alias, and lifecycle script changes without applying them",
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			return a.machineDiff(profile)
@@ -85,12 +89,21 @@ func (a *app) loadMachineInputs(profile string) (machineInputs, error) {
 	if err != nil {
 		return machineInputs{}, err
 	}
+	scriptCatalog, err := lifecyclescripts.Load(paths.Root, paths.Scripts)
+	if err != nil {
+		return machineInputs{}, err
+	}
+	scriptInspection, err := scriptCatalog.Inspect(home)
+	if err != nil {
+		return machineInputs{}, err
+	}
 	return machineInputs{
 		configurationInput: input,
 		paths:              paths,
 		home:               home,
 		shell:              shell,
 		aliasPath:          aliasPath,
+		scripts:            scriptInspection,
 	}, nil
 }
 
@@ -125,11 +138,13 @@ func (a *app) inspectMachine(profile string) (machineInspection, error) {
 		return machineInspection{}, err
 	}
 	return machineInspection{
-		managedHome: managedHomeInspection.Entries(),
-		backups:     backupInspection,
-		alias:       aliasInspection,
-		skills:      skillInspection,
-		tools:       len(inputs.tools.Tools),
+		managedHome:   managedHomeInspection.Entries(),
+		backups:       backupInspection,
+		alias:         aliasInspection,
+		skills:        skillInspection,
+		beforeScripts: inputs.scripts.Eligible(lifecyclescripts.BeforeApply),
+		afterScripts:  inputs.scripts.Eligible(lifecyclescripts.AfterApply),
+		tools:         len(inputs.tools.Tools),
 	}, nil
 }
 
@@ -209,12 +224,28 @@ func (a *app) machineStatus(profile string) error {
 	if inspection.tools == 1 {
 		toolNoun = "tool"
 	}
-	return writef(
+	if err := writef(
 		a.output,
 		"Tools:\n  unchecked %d declared %s; checks were not run because status is read-only and tool checks are user-authored commands\n",
 		inspection.tools,
 		toolNoun,
-	)
+	); err != nil {
+		return err
+	}
+	if len(inspection.beforeScripts) == 0 && len(inspection.afterScripts) == 0 {
+		return nil
+	}
+	if err := write(a.output, "Lifecycle scripts:\n"); err != nil {
+		return err
+	}
+	for _, scripts := range [][]lifecyclescripts.Entry{inspection.beforeScripts, inspection.afterScripts} {
+		for _, script := range scripts {
+			if err := writef(a.output, "  would run %s\n", script.Path); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (a *app) machineDiff(profile string) error {
@@ -223,6 +254,12 @@ func (a *app) machineDiff(profile string) error {
 		return err
 	}
 	reported := false
+	for _, script := range inspection.beforeScripts {
+		reported = true
+		if err := writef(a.output, "Would run lifecycle script %s\n", script.Path); err != nil {
+			return err
+		}
+	}
 	for _, item := range inspection.managedHome {
 		if description := item.PlanDescription(); description != "" {
 			reported = true
@@ -245,6 +282,12 @@ func (a *app) machineDiff(profile string) error {
 	case aliases.StateConflict:
 		reported = true
 		if err := writef(a.output, "Conflict: %s\n", inspection.alias.Problem); err != nil {
+			return err
+		}
+	}
+	for _, script := range inspection.afterScripts {
+		reported = true
+		if err := writef(a.output, "Would run lifecycle script %s\n", script.Path); err != nil {
 			return err
 		}
 	}

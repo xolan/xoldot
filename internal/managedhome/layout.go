@@ -8,16 +8,15 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
-	"syscall"
 
+	"github.com/xolan/xoldot/internal/machinestate"
 	"github.com/xolan/xoldot/internal/pathutil"
 )
 
 const (
-	stateRelativePath   = ".local/state/xoldot"
-	ledgerRelativePath  = stateRelativePath + "/links.json"
-	lockRelativePath    = stateRelativePath + "/links.lock"
-	backupsRelativePath = stateRelativePath + "/backups"
+	ledgerRelativePath  = machinestate.LinkLedgerRelativePath
+	lockRelativePath    = machinestate.LinkLockRelativePath
+	backupsRelativePath = machinestate.BackupsRelativePath
 )
 
 type managedHomeLayout struct {
@@ -170,9 +169,7 @@ func relativeWithin(root, path, description string) (string, error) {
 }
 
 func (layout managedHomeLayout) reservedTarget(path string) bool {
-	backups := filepath.Join(layout.Home, filepath.FromSlash(backupsRelativePath))
-	return path == layout.LedgerPath || path == layout.LockPath ||
-		path == backups || pathutil.Contains(backups, path)
+	return machinestate.IsReserved(layout.Home, path)
 }
 
 func (layout managedHomeLayout) loadLedger() (linkLedger, error) {
@@ -226,25 +223,18 @@ func (layout managedHomeLayout) recordsWith(record linkRecord, previous linkLedg
 }
 
 func (layout managedHomeLayout) acquireLedgerLock(root *os.Root) (*os.File, error) {
-	stateDirectory := filepath.Dir(filepath.FromSlash(lockRelativePath))
-	if err := root.MkdirAll(stateDirectory, 0o755); err != nil {
-		return nil, fmt.Errorf("create managed link state directory: %w", err)
-	}
-	lock, err := root.OpenFile(filepath.FromSlash(lockRelativePath), os.O_CREATE|os.O_RDWR, 0o600)
+	lock, err := machinestate.AcquireRootedLock(root, lockRelativePath)
 	if err != nil {
-		return nil, fmt.Errorf("open managed link state lock %s: %w", layout.LockPath, err)
-	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		_ = lock.Close()
-		return nil, fmt.Errorf("lock managed link state %s: %w", layout.LedgerPath, err)
+		return nil, fmt.Errorf("acquire managed link state lock %s: %w", layout.LockPath, err)
 	}
 	return lock, nil
 }
 
 func releaseLedgerLock(lock *os.File) error {
-	unlockErr := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	closeErr := lock.Close()
-	return errors.Join(unlockErr, closeErr)
+	if err := machinestate.ReleaseRootedLock(lock); err != nil {
+		return fmt.Errorf("release managed link state lock: %w", err)
+	}
+	return nil
 }
 
 func resolveRoot(root, description string) (string, error) {

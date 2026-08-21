@@ -62,6 +62,22 @@ func TestCheckReportsConfigurationPathContainmentAndSymlinkEscapes(t *testing.T)
 	}
 }
 
+func TestCheckReportsLifecycleScriptsPathEscape(t *testing.T) {
+	paths, _ := newFixture(t)
+	if err := os.RemoveAll(paths.Scripts); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, paths.Scripts); err != nil {
+		t.Fatal(err)
+	}
+
+	report := check(paths, unusedRuntime(t))
+	if !reportContains(report, Error, paths.Scripts) || !reportContains(report, Error, "does not resolve beneath") {
+		t.Fatalf("report = %+v", report.Findings())
+	}
+}
+
 func TestCheckRejectsTargetHomeThatIsNotADirectory(t *testing.T) {
 	paths, home := newFixture(t)
 	if err := os.Remove(home); err != nil {

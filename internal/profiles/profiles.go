@@ -50,6 +50,7 @@ type members struct {
 }
 
 type Configuration struct {
+	Name        string
 	Tools       toolcatalog.Catalog
 	Aliases     aliases.File
 	Skills      agentskills.Catalog
@@ -156,6 +157,7 @@ func Load(paths config.Paths, selectedName string) (Configuration, error) {
 	}
 
 	return Configuration{
+		Name:        selectedName,
 		Tools:       filterTools(profiles.tools, selected.tools),
 		Aliases:     filterAliases(profiles.aliases, selected.aliases),
 		Skills:      filterSkills(profiles.skills, selected.skills),
