@@ -61,6 +61,15 @@ func newManagedHomeLayout(managedRoot, home, configRoot string) (managedHomeLayo
 	if layout.managedIdentity, err = directoryIdentity(managedRoot, "managed home"); err != nil {
 		return managedHomeLayout{}, err
 	}
+	for _, statePath := range []string{layout.LedgerPath, layout.LockPath} {
+		resolved, resolveErr := pathutil.ResolveExistingPrefix(statePath)
+		if resolveErr != nil {
+			return managedHomeLayout{}, fmt.Errorf("resolve managed link state path %s: %w", statePath, resolveErr)
+		}
+		if !pathutil.Contains(home, resolved) {
+			return managedHomeLayout{}, fmt.Errorf("managed link state path %s resolves outside the target home %s", statePath, home)
+		}
+	}
 	return layout, nil
 }
 

@@ -55,6 +55,16 @@ func TestAddRejectsUnsafeName(t *testing.T) {
 	}
 }
 
+func TestOutputPathRejectsConfigurationContainment(t *testing.T) {
+	configurationRoot := t.TempDir()
+	home := t.TempDir()
+	directory := filepath.Join(configurationRoot, "generated")
+
+	if _, err := OutputPath(directory, home, configurationRoot, "bash"); err == nil || !strings.Contains(err.Error(), "inside the Configuration directory") {
+		t.Fatalf("OutputPath() error = %v, want containment error", err)
+	}
+}
+
 func TestPrepareRefusesUnownedOutput(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "alias.bash")
 	if err := os.WriteFile(path, []byte("alias precious='keep-me'\n"), 0o644); err != nil {

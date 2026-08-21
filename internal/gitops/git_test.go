@@ -2,6 +2,7 @@ package gitops
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -110,6 +111,68 @@ func TestFormatCommandRedactsRemoteCredentials(t *testing.T) {
 	got := formatCommand([]string{"remote", "add", "origin", "https://token@github.com/owner/repo?access_token=secret"})
 	if strings.Contains(got, "token") || strings.Contains(got, "secret") {
 		t.Errorf("formatCommand() leaked credentials: %q", got)
+	}
+}
+
+func TestInspectLocalUsesOnlyLocalGitState(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(t.TempDir(), "git-commands")
+	standin := filepath.Join(t.TempDir(), "git")
+	script := fmt.Sprintf(`#!/bin/sh
+printf '%%s\n' "$*" >> %q
+case "$1" in
+  config) exit 1 ;;
+  symbolic-ref) printf 'main\n' ;;
+  show-ref) exit 1 ;;
+  *) exit 99 ;;
+esac
+`, log)
+	if err := os.WriteFile(standin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	inspection, err := (Runner{Dir: root, Executable: standin}).InspectLocal("upstream", "trunk")
+	if err != nil {
+		t.Fatalf("InspectLocal() error = %v", err)
+	}
+	if !inspection.Repository || inspection.Remote || inspection.Branch {
+		t.Errorf("inspection = %+v", inspection)
+	}
+	commands, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(commands)
+	for _, want := range []string{
+		"config --local --get remote.upstream.url",
+		"symbolic-ref --short HEAD",
+		"show-ref --verify --quiet refs/heads/trunk",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("commands = %q, want %q", got, want)
+		}
+	}
+	for _, forbidden := range []string{"fetch", "ls-remote", "pull", "push", "credential"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("InspectLocal() ran forbidden command %q: %s", forbidden, got)
+		}
+	}
+}
+
+func TestInspectLocalDoesNotRunGitOutsideRepository(t *testing.T) {
+	standin := filepath.Join(t.TempDir(), "git")
+	if err := os.WriteFile(standin, []byte("#!/bin/sh\nexit 99\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := (Runner{Dir: t.TempDir(), Executable: standin}).InspectLocal("origin", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection != (LocalInspection{}) {
+		t.Errorf("inspection = %+v", inspection)
 	}
 }
 

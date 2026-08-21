@@ -16,6 +16,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/xolan/xoldot/internal/config"
+	"github.com/xolan/xoldot/internal/pathutil"
 )
 
 var validName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
@@ -108,7 +109,7 @@ func Add(file *File, name, command string) (updated bool, err error) {
 	return false, nil
 }
 
-func isSupportedShell(shell string) bool {
+func SupportsShell(shell string) bool {
 	return slices.Contains(supportedShells, shell)
 }
 
@@ -119,13 +120,33 @@ func DetectShell() (string, error) {
 	}
 	shell = filepath.Base(shell)
 	switch {
-	case isSupportedShell(shell):
+	case SupportsShell(shell):
 		return shell, nil
 	case shell == "" || shell == ".":
 		return "", fmt.Errorf("cannot detect shell; set SHELL or XOLDOT_SHELL to bash, zsh, or fish")
 	default:
 		return "", fmt.Errorf("unsupported shell %q; supported shells are bash, zsh, and fish", shell)
 	}
+}
+
+func OutputPath(directory, home, configurationRoot, shell string) (string, error) {
+	directory, err := config.ExpandHome(directory, home)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(directory, "alias."+shell)
+	resolvedPath, err := pathutil.ResolveExistingPrefix(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve Alias output %s: %w", path, err)
+	}
+	resolvedRoot, err := pathutil.ResolveExistingPrefix(configurationRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve Configuration directory %s: %w", configurationRoot, err)
+	}
+	if pathutil.Contains(resolvedRoot, resolvedPath) {
+		return "", fmt.Errorf("alias output %s resolves inside the Configuration directory", path)
+	}
+	return path, nil
 }
 
 func Render(path, shell string, aliases []Alias) error {
@@ -156,7 +177,7 @@ func Inspect(path, shell string, aliases []Alias) (Inspection, error) {
 }
 
 func buildPlan(path, shell string, aliases []Alias) (Plan, Inspection, error) {
-	if !isSupportedShell(shell) {
+	if !SupportsShell(shell) {
 		return Plan{}, Inspection{}, fmt.Errorf("unsupported shell %q", shell)
 	}
 

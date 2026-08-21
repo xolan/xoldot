@@ -60,6 +60,25 @@ type ManagedHomeSelection struct {
 	paths []managedPath
 }
 
+type profileSet struct {
+	resolved map[string]members
+	tools    toolcatalog.Catalog
+	aliases  aliases.File
+	skills   agentskills.Catalog
+}
+
+type CatalogError struct {
+	err error
+}
+
+func (err *CatalogError) Error() string {
+	return err.err.Error()
+}
+
+func (err *CatalogError) Unwrap() error {
+	return err.err
+}
+
 func (selection ManagedHomeSelection) Includes(relative string) bool {
 	relative = filepath.Clean(relative)
 	for _, selected := range selection.paths {
@@ -70,21 +89,47 @@ func (selection ManagedHomeSelection) Includes(relative string) bool {
 	return false
 }
 
-func Load(paths config.Paths, selectedName string) (Configuration, error) {
+// Validate checks every Profile and each referenced catalog member.
+func Validate(paths config.Paths) error {
+	_, err := loadProfileSet(paths)
+	return err
+}
+
+func loadProfileSet(paths config.Paths) (profileSet, error) {
+	documents, err := loadDocuments(paths.Profiles)
+	if err != nil {
+		return profileSet{}, err
+	}
 	tools, err := toolcatalog.Load(paths.Tools)
 	if err != nil {
-		return Configuration{}, err
+		return profileSet{}, &CatalogError{err: err}
 	}
 	aliasFile, err := aliases.Load(paths.Aliases)
 	if err != nil {
-		return Configuration{}, err
+		return profileSet{}, &CatalogError{err: err}
 	}
 	skills, err := agentskills.Load(paths.Skills)
 	if err != nil {
-		return Configuration{}, err
+		return profileSet{}, &CatalogError{err: err}
 	}
 
-	documents, err := loadDocuments(paths.Profiles)
+	if err := validateDocuments(documents, paths.ManagedHome, tools, aliasFile, skills); err != nil {
+		return profileSet{}, err
+	}
+	resolved, err := resolveAll(documents)
+	if err != nil {
+		return profileSet{}, err
+	}
+	return profileSet{
+		resolved: resolved,
+		tools:    tools,
+		aliases:  aliasFile,
+		skills:   skills,
+	}, nil
+}
+
+func Load(paths config.Paths, selectedName string) (Configuration, error) {
+	profiles, err := loadProfileSet(paths)
 	if err != nil {
 		return Configuration{}, err
 	}
@@ -92,19 +137,12 @@ func Load(paths config.Paths, selectedName string) (Configuration, error) {
 	if err != nil {
 		return Configuration{}, err
 	}
-	if _, exists := documents[selectedName]; !exists {
+	if _, exists := profiles.resolved[selectedName]; !exists {
 		return Configuration{}, fmt.Errorf("profile %q does not exist", selectedName)
 	}
-	if err := validateDocuments(documents, paths.ManagedHome, tools, aliasFile, skills); err != nil {
-		return Configuration{}, err
-	}
-	resolved, err := resolveAll(documents)
-	if err != nil {
-		return Configuration{}, err
-	}
-	selected := resolved[selectedName]
+	selected := profiles.resolved[selectedName]
 
-	for _, skill := range skills.Skills {
+	for _, skill := range profiles.skills.Skills {
 		if _, exists := selected.skills[skill.Name]; !exists {
 			continue
 		}
@@ -118,9 +156,9 @@ func Load(paths config.Paths, selectedName string) (Configuration, error) {
 	}
 
 	return Configuration{
-		Tools:       filterTools(tools, selected.tools),
-		Aliases:     filterAliases(aliasFile, selected.aliases),
-		Skills:      filterSkills(skills, selected.skills),
+		Tools:       filterTools(profiles.tools, selected.tools),
+		Aliases:     filterAliases(profiles.aliases, selected.aliases),
+		Skills:      filterSkills(profiles.skills, selected.skills),
 		ManagedHome: newManagedHomeSelection(selected.managedHome),
 	}, nil
 }
@@ -139,6 +177,9 @@ func loadDocuments(directory string) (map[string]document, error) {
 	for _, entry := range entries {
 		if filepath.Ext(entry.Name()) != ".toml" {
 			continue
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("profile %s is not an ordinary file", entry.Name())
 		}
 		name, err := normalizeName(strings.TrimSuffix(entry.Name(), ".toml"))
 		if err != nil {

@@ -14,11 +14,18 @@ import (
 )
 
 type Runner struct {
-	Dir      string
-	Stdout   io.Writer
-	Stderr   io.Writer
-	Verbose  bool
-	Reporter reportstatus.Reporter
+	Dir        string
+	Executable string
+	Stdout     io.Writer
+	Stderr     io.Writer
+	Verbose    bool
+	Reporter   reportstatus.Reporter
+}
+
+type LocalInspection struct {
+	Repository bool
+	Remote     bool
+	Branch     bool
 }
 
 type CheckoutError struct {
@@ -175,6 +182,41 @@ func (runner Runner) HasLocalHistory() (bool, error) {
 	return false, fmt.Errorf("inspect local git history: %w", err)
 }
 
+func (runner Runner) InspectLocal(remote, branch string) (LocalInspection, error) {
+	if strings.TrimSpace(remote) == "" || strings.TrimSpace(branch) == "" {
+		return LocalInspection{}, fmt.Errorf("git remote and branch must be configured")
+	}
+	if _, err := os.Stat(runner.Dir + "/.git"); errors.Is(err, os.ErrNotExist) {
+		return LocalInspection{}, nil
+	} else if err != nil {
+		return LocalInspection{}, fmt.Errorf("inspect local Git repository: %w", err)
+	}
+
+	inspection := LocalInspection{Repository: true}
+	remoteURL, err := runner.output("config", "--local", "--get", "remote."+remote+".url")
+	if err == nil {
+		inspection.Remote = strings.TrimSpace(remoteURL) != ""
+	} else if !hasExitCode(err, 1) {
+		return LocalInspection{}, fmt.Errorf("inspect local Git remote %q: %w", remote, err)
+	}
+
+	current, currentErr := runner.output("symbolic-ref", "--short", "HEAD")
+	if currentErr == nil && strings.TrimSpace(current) == branch {
+		inspection.Branch = true
+		return inspection, nil
+	}
+	if currentErr != nil && !hasExitCode(currentErr, 1) {
+		return LocalInspection{}, fmt.Errorf("inspect current local Git branch: %w", currentErr)
+	}
+	command := runner.command("show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	if err := command.Run(); err == nil {
+		inspection.Branch = true
+	} else if !hasExitCode(err, 1) {
+		return LocalInspection{}, fmt.Errorf("inspect local Git branch %q: %w", branch, err)
+	}
+	return inspection, nil
+}
+
 func (runner Runner) hasStagedChanges() (bool, error) {
 	command := runner.command("diff", "--cached", "--quiet", "--exit-code")
 	err := command.Run()
@@ -227,7 +269,11 @@ func (runner Runner) command(arguments ...string) *exec.Cmd {
 	// Stdin stays nil: a non-*os.File stdin makes exec.Cmd copy in a
 	// goroutine that Wait blocks on until the next terminal read returns,
 	// hanging every git command. Git prompts via /dev/tty regardless.
-	command := exec.Command("git", arguments...)
+	executable := runner.Executable
+	if executable == "" {
+		executable = "git"
+	}
+	command := exec.Command(executable, arguments...)
 	command.Dir = runner.Dir
 	return command
 }

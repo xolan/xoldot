@@ -161,6 +161,90 @@ func TestLoadRejectsInvalidProfiles(t *testing.T) {
 	}
 }
 
+func TestValidateChecksEveryProfile(t *testing.T) {
+	tests := []struct {
+		name      string
+		profiles  map[string]string
+		wantError string
+	}{
+		{
+			name: "missing parent",
+			profiles: map[string]string{
+				"unused": `extends = ["missing"]`,
+			},
+			wantError: "missing profile",
+		},
+		{
+			name: "inheritance cycle",
+			profiles: map[string]string{
+				"unused": `extends = ["middle"]`,
+				"middle": `extends = ["unused"]`,
+			},
+			wantError: "inheritance cycle",
+		},
+		{
+			name: "unknown member",
+			profiles: map[string]string{
+				"unused": `tools = ["missing"]`,
+			},
+			wantError: "unknown Tool",
+		},
+		{
+			name: "invalid managed path",
+			profiles: map[string]string{
+				"unused": `managed_home = ["../escape"]`,
+			},
+			wantError: "clean relative path",
+		},
+		{
+			name: "unknown field",
+			profiles: map[string]string{
+				"unused": `hostname = "automatic"`,
+			},
+			wantError: "strict mode",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			paths := profileFixture(t)
+			writeProfile(t, paths, "selected", `tools = ["git"]`)
+			for name, contents := range test.profiles {
+				writeProfile(t, paths, name, contents)
+			}
+
+			if err := Validate(paths); err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("Validate() error = %v, want it to contain %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestValidateAcceptsValidProfiles(t *testing.T) {
+	paths := profileFixture(t)
+	writeProfile(t, paths, "base", `tools = ["git"]`)
+	writeProfile(t, paths, "work", `extends = ["base"]
+aliases = ["ll"]
+managed_home = [".config/work/config.toml"]`)
+
+	if err := Validate(paths); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsSymlinkedProfile(t *testing.T) {
+	paths := profileFixture(t)
+	target := filepath.Join(t.TempDir(), "target.toml")
+	writeFile(t, target, `tools = ["git"]`)
+	if err := os.Symlink(target, filepath.Join(paths.Profiles, "linked.toml")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Validate(paths); err == nil || !strings.Contains(err.Error(), "not an ordinary file") {
+		t.Fatalf("Validate() error = %v, want ordinary file error", err)
+	}
+}
+
 func TestLoadRejectsUnsafeManagedHomeMembers(t *testing.T) {
 	for _, relative := range []string{
 		"/absolute",

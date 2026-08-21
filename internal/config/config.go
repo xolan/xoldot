@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -132,11 +133,39 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 	cfg.setDefaults()
+	if err := validate(cfg); err != nil {
+		return Config{}, fmt.Errorf("validate %s: %w", path, err)
+	}
 	return cfg, nil
+}
+
+func validate(cfg Config) error {
+	cfg.setDefaults()
+	if strings.TrimSpace(cfg.Git.Remote) == "" {
+		return fmt.Errorf("git remote cannot be empty")
+	}
+	if strings.TrimSpace(cfg.Git.Branch) == "" {
+		return fmt.Errorf("git branch cannot be empty")
+	}
+	if strings.TrimSpace(cfg.Aliases.Dir) == "" {
+		return fmt.Errorf("alias output directory cannot be empty")
+	}
+
+	seen := make(map[string]struct{}, len(cfg.Aliases.Shells))
+	for _, shell := range cfg.Aliases.Shells {
+		if _, exists := seen[shell]; exists {
+			return fmt.Errorf("alias shell %q is duplicated", shell)
+		}
+		seen[shell] = struct{}{}
+	}
+	return nil
 }
 
 func Save(path string, cfg Config) error {
 	cfg.setDefaults()
+	if err := validate(cfg); err != nil {
+		return fmt.Errorf("validate %s: %w", path, err)
+	}
 	data, err := toml.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", path, err)
@@ -185,7 +214,9 @@ func decode(data []byte) (Config, error) {
 		return Config{}, err
 	}
 	var cfg Config
-	return cfg, toml.Unmarshal(normalized, &cfg)
+	decoder := toml.NewDecoder(bytes.NewReader(normalized))
+	decoder.DisallowUnknownFields()
+	return cfg, decoder.Decode(&cfg)
 }
 
 func normalizeSingleton(document map[string]any, section string) error {

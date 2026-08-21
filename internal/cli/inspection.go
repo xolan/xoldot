@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"path/filepath"
 	"slices"
 
 	"github.com/spf13/cobra"
@@ -81,11 +80,10 @@ func (a *app) loadMachineInputs(profile string) (machineInputs, error) {
 	if !slices.Contains(aliasSettings.Shells, shell) {
 		return machineInputs{}, fmt.Errorf("detected shell %q is disabled by aliases.shells", shell)
 	}
-	aliasDir, err := config.ExpandHome(aliasSettings.Dir, home)
+	aliasPath, err := aliases.OutputPath(aliasSettings.Dir, home, paths.Root, shell)
 	if err != nil {
 		return machineInputs{}, err
 	}
-	aliasPath := filepath.Join(aliasDir, "alias."+shell)
 	return machineInputs{
 		configurationInput: input,
 		paths:              paths,
