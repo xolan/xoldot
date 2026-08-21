@@ -15,7 +15,6 @@ import (
 	"github.com/xolan/xoldot/internal/aliases"
 	"github.com/xolan/xoldot/internal/config"
 	"github.com/xolan/xoldot/internal/gitops"
-	"github.com/xolan/xoldot/internal/managedhome"
 	agentskills "github.com/xolan/xoldot/internal/skills"
 	"github.com/xolan/xoldot/internal/status"
 	toolcatalog "github.com/xolan/xoldot/internal/tools"
@@ -193,17 +192,7 @@ func (a *app) rootCommand(version string) *cobra.Command {
 	)
 	root.AddCommand(skillCommand)
 
-	var applyDry bool
-	applyCommand := &cobra.Command{
-		Use:   "apply",
-		Short: "Install tools, link managed home content, and render aliases",
-		Args:  cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
-			return a.apply(applyDry)
-		},
-	}
-	applyCommand.Flags().BoolVar(&applyDry, "dry", false, "show what would change without changing it")
-	root.AddCommand(applyCommand)
+	root.AddCommand(a.applyCommand())
 
 	var syncDry bool
 	syncCommand := &cobra.Command{
@@ -474,83 +463,6 @@ func (a *app) skillList() error {
 		names[index] = skill.Name
 	}
 	return writeSortedNames(a.output, names)
-}
-
-func (a *app) apply(dry bool) error {
-	paths, err := a.paths()
-	if err != nil {
-		return err
-	}
-	cfg, err := config.Load(paths.Config)
-	if err != nil {
-		return err
-	}
-	catalog, err := toolcatalog.Load(paths.Tools)
-	if err != nil {
-		return err
-	}
-	home, err := config.TargetHome()
-	if err != nil {
-		return err
-	}
-	shell, err := aliases.DetectShell()
-	if err != nil {
-		return err
-	}
-	aliasSettings := cfg.AliasSettings()
-	if !slices.Contains(aliasSettings.Shells, shell) {
-		return fmt.Errorf("detected shell %q is disabled by aliases.shells", shell)
-	}
-	aliasDir, err := config.ExpandHome(aliasSettings.Dir, home)
-	if err != nil {
-		return err
-	}
-	file, err := aliases.Load(paths.Aliases)
-	if err != nil {
-		return err
-	}
-	aliasPath := filepath.Join(aliasDir, "alias."+shell)
-	aliasPlan, err := aliases.Prepare(aliasPath, shell, file.Aliases)
-	if err != nil {
-		return err
-	}
-	managedHomePlan, err := managedhome.Prepare(paths.ManagedHome, home, paths.Root)
-	if err != nil {
-		return err
-	}
-
-	if err := toolcatalog.Apply(catalog, toolcatalog.CurrentPlatform(), a.input, a.output, a.errorOutput, a.reporter, dry); err != nil {
-		return err
-	}
-	linked, err := managedHomePlan.Apply(a.reporter, dry)
-	if err != nil {
-		return err
-	}
-	if dry {
-		if err := a.reportf(
-			status.Progress,
-			"Managed home links: would create %d, remove %d, leave %d current",
-			linked.Created,
-			linked.Removed,
-			linked.Current,
-		); err != nil {
-			return err
-		}
-		return a.reportf(status.Progress, "Would render aliases to %s", aliasPath)
-	}
-	if err := a.reportf(
-		status.Success,
-		"Managed home links: %d created, %d removed, %d already current",
-		linked.Created,
-		linked.Removed,
-		linked.Current,
-	); err != nil {
-		return err
-	}
-	if err := aliasPlan.Apply(); err != nil {
-		return err
-	}
-	return a.reportf(status.Success, "Rendered aliases to %s", aliasPath)
 }
 
 func (a *app) sync(dry bool) error {

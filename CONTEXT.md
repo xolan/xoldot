@@ -69,9 +69,14 @@ Setup does not apply the Configuration to a Machine.
 _Avoid_: Apply, bootstrap
 
 **Apply**:
-Reconciliation of a Configuration with a Machine. It ensures Tools are present,
-exposes managed home content, and renders Aliases for the selected shell.
+Reconciliation of a Configuration with a Machine. It reconciles every Apply
+part by default, or only the parts selected by the user.
 _Avoid_: Install, Sync
+
+**Apply part**:
+One of the independently selectable parts of Apply: Tools, managed home
+content, or Aliases.
+_Avoid_: Component, Step
 
 **Sync**:
 Git synchronization of a Configuration repository. It commits Configuration

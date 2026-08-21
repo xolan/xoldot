@@ -7,6 +7,7 @@ can be synchronized through Git.
 ## Table of contents
 
 - [Get started](#get-started)
+- [Apply](#apply)
 - [Tools](#tools)
 - [Agent skills](#agent-skills)
 - [Aliases](#aliases)
@@ -49,8 +50,7 @@ Apply the configuration to the current machine:
 xoldot apply
 ```
 
-This installs missing tools, links managed home content, and renders aliases
-for the current shell.
+This runs every Apply part. See [Apply](#apply) to run only selected parts.
 
 The default configuration is:
 
@@ -66,6 +66,23 @@ shells = ["bash", "zsh", "fish"]
 ```
 
 Use `--verbose` or `-v` to print the Git and `npx` commands that xoldot runs.
+
+## Apply
+
+With no `--only` flag, Apply runs all three parts in this order: `tools`,
+`managed-home`, then `aliases`. Select one part or repeat the flag to select
+more than one:
+
+```sh
+xoldot apply --only managed-home
+xoldot apply --only managed-home --only aliases
+xoldot apply --only tools --dry
+```
+
+The accepted values are exactly `tools`, `managed-home`, and `aliases`.
+Repeated values count once. Selected parts keep the default order, regardless
+of flag order. Beyond loading `xoldot.toml`, Apply reads, validates, changes,
+and reports only the selected parts. `--dry` previews the same selection.
 
 ## Tools
 
@@ -102,9 +119,9 @@ arch = "yay -S jq"
 On Linux, distribution IDs such as `arch` override `default`. xoldot reads the
 ID from `/etc/os-release`.
 
-During apply, xoldot runs `check` with `/bin/sh`. If it fails, xoldot runs the
-matching install command and checks again. Install commands are trusted shell
-commands and may prompt for credentials.
+When Apply includes `tools`, xoldot runs `check` with `/bin/sh`. If it fails,
+xoldot runs the matching install command and checks again. Install commands are
+trusted shell commands and may prompt for credentials.
 
 ```sh
 xoldot tool list
@@ -163,8 +180,8 @@ xoldot alias add ll "ls -la"
 xoldot alias add gs "git status"
 ```
 
-Aliases are stored in `files/aliases.toml`. Apply detects the current shell
-from `SHELL` and renders one of these files:
+Aliases are stored in `files/aliases.toml`. When Apply includes `aliases`, it
+detects the current shell from `SHELL` and renders one of these files:
 
 ```text
 ~/.aliases/alias.bash
@@ -203,8 +220,8 @@ xoldot apply
 
 xoldot creates the parent directories and symlinks the file. It will not
 replace an existing file or a symlink that points somewhere else. If you
-remove a managed file, the next apply removes its old home link only when that
-link still points to the managed location.
+remove a managed file, the next Apply that includes `managed-home` removes its
+old home link only when that link still points to the managed location.
 
 ## Sync
 
@@ -223,8 +240,8 @@ xoldot apply --dry
 xoldot sync --dry
 ```
 
-Dry apply does not run tool checks because they are user-authored shell
-commands.
+Dry Apply does not run selected Tool checks because they are user-authored
+shell commands.
 
 ## Overrides and limits
 
