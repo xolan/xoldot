@@ -156,3 +156,80 @@ func TestPlanCurrentDoesNotRewrite(t *testing.T) {
 		t.Error("Apply() replaced an already-current output")
 	}
 }
+
+func TestInspectReportsMissingOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "alias.bash")
+	inspection, err := Inspect(path, "bash", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.State != StateMissing {
+		t.Errorf("state = %q, want %q", inspection.State, StateMissing)
+	}
+}
+
+func TestInspectReportsOwnedReplacementWithUnifiedDiff(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "alias.bash")
+	if err := Render(path, "bash", []Alias{{Name: "ll", Command: "ls -l"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	inspection, err := Inspect(path, "bash", []Alias{{Name: "ll", Command: "ls -la"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.State != StateReplaceable {
+		t.Fatalf("state = %q, want %q", inspection.State, StateReplaceable)
+	}
+	diff := inspection.UnifiedDiff()
+	for _, want := range []string{
+		"--- " + path,
+		"+++ " + path + " (planned)",
+		"-alias ll='ls -l'",
+		"+alias ll='ls -la'",
+	} {
+		if !strings.Contains(diff, want) {
+			t.Errorf("diff does not contain %q:\n%s", want, diff)
+		}
+	}
+}
+
+func TestInspectReportsLocallyModifiedOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "alias.bash")
+	if err := Render(path, "bash", []Alias{{Name: "ll", Command: "ls -l"}}); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("alias local='keep-me'\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	inspection, err := Inspect(path, "bash", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.State != StateConflict || !strings.Contains(inspection.Problem, "local changes") {
+		t.Errorf("inspection = %+v, want local-change conflict", inspection)
+	}
+}
+
+func TestInspectReportsNonOwnedOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "alias.bash")
+	if err := os.WriteFile(path, []byte("alias precious='keep-me'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	inspection, err := Inspect(path, "bash", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.State != StateConflict || !strings.Contains(inspection.Problem, "not managed") {
+		t.Errorf("inspection = %+v, want non-owned conflict", inspection)
+	}
+}

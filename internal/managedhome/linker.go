@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 
 	"github.com/xolan/xoldot/internal/config"
 	"github.com/xolan/xoldot/internal/pathutil"
@@ -18,6 +19,43 @@ type Result struct {
 	Created int
 	Current int
 	Removed int
+}
+
+type State string
+
+const (
+	StateCurrent  State = "current"
+	StateMissing  State = "missing"
+	StateStale    State = "stale"
+	StateConflict State = "conflict"
+)
+
+type Entry struct {
+	State       State
+	Target      string
+	Destination string
+	Problem     string
+}
+
+func (entry Entry) PlanDescription() string {
+	switch entry.State {
+	case StateMissing:
+		return fmt.Sprintf("Would link %s -> %s", entry.Target, entry.Destination)
+	case StateStale:
+		return fmt.Sprintf("Would remove stale link %s", entry.Target)
+	case StateConflict:
+		return fmt.Sprintf("Conflict at %s: %s", entry.Target, entry.Problem)
+	default:
+		return ""
+	}
+}
+
+type Inspection struct {
+	entries []Entry
+}
+
+func (inspection Inspection) Entries() []Entry {
+	return append([]Entry(nil), inspection.entries...)
 }
 
 type linkLedger struct {
@@ -36,6 +74,28 @@ type linkPlan struct {
 	LegacyLinks                 int
 }
 
+type plannedConflict struct {
+	entry Entry
+	err   error
+}
+
+func newPlannedConflict(record linkRecord, problem string, err error) plannedConflict {
+	return plannedConflict{
+		entry: Entry{
+			State:       StateConflict,
+			Target:      record.Target,
+			Destination: record.Destination,
+			Problem:     problem,
+		},
+		err: err,
+	}
+}
+
+func newUnownedConflict(record linkRecord) plannedConflict {
+	const problem = "target already exists and is not managed by xoldot"
+	return newPlannedConflict(record, problem, fmt.Errorf("target %s already exists and is not managed by xoldot", record.Target))
+}
+
 type Plan struct {
 	ledgerPath string
 	previous   linkLedger
@@ -43,6 +103,7 @@ type Plan struct {
 	records    []linkRecord
 	stale      []linkRecord
 	current    []linkRecord
+	conflicts  []plannedConflict
 }
 
 func Link(managedRoot, home, configRoot string, reporter reportstatus.Reporter, dry bool) (Result, error) {
@@ -54,6 +115,25 @@ func Link(managedRoot, home, configRoot string, reporter reportstatus.Reporter, 
 }
 
 func Prepare(managedRoot, home, configRoot string) (Plan, error) {
+	plan, err := prepare(managedRoot, home, configRoot)
+	if err != nil {
+		return Plan{}, err
+	}
+	if len(plan.conflicts) > 0 {
+		return Plan{}, plan.conflicts[0].err
+	}
+	return plan, nil
+}
+
+func Inspect(managedRoot, home, configRoot string) (Inspection, error) {
+	plan, err := prepare(managedRoot, home, configRoot)
+	if err != nil {
+		return Inspection{}, err
+	}
+	return plan.inspection(), nil
+}
+
+func prepare(managedRoot, home, configRoot string) (Plan, error) {
 	managedRoot, err := filepath.Abs(managedRoot)
 	if err != nil {
 		return Plan{}, fmt.Errorf("resolve managed home: %w", err)
@@ -91,6 +171,7 @@ func Prepare(managedRoot, home, configRoot string) (Plan, error) {
 	var plans []linkPlan
 	var records []linkRecord
 	var current []linkRecord
+	var conflicts []plannedConflict
 	err = walkManagedRoot(managedRoot, func(source string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -137,14 +218,21 @@ func Prepare(managedRoot, home, configRoot string) (Plan, error) {
 		switch state {
 		case linkConflict:
 			if !skillDirectory {
-				return fmt.Errorf("target %s already exists and is not managed by xoldot", target)
+				conflicts = append(conflicts, newUnownedConflict(record))
+				break
 			}
 			legacyLinks, replace, err := legacySkillDirectory(target, previous)
 			if err != nil {
-				return err
+				var pathError *os.PathError
+				if errors.As(err, &pathError) && !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+				conflicts = append(conflicts, newPlannedConflict(record, err.Error(), err))
+				break
 			}
 			if !replace {
-				return fmt.Errorf("target %s already exists and is not managed by xoldot", target)
+				conflicts = append(conflicts, newUnownedConflict(record))
+				break
 			}
 			plans = append(plans, linkPlan{
 				linkRecord:                  record,
@@ -199,7 +287,37 @@ func Prepare(managedRoot, home, configRoot string) (Plan, error) {
 		records:    records,
 		stale:      stale,
 		current:    current,
+		conflicts:  conflicts,
 	}, nil
+}
+
+func (plan Plan) inspection() Inspection {
+	entries := make([]Entry, 0, len(plan.current)+len(plan.links)+len(plan.stale)+len(plan.conflicts))
+	for _, record := range plan.current {
+		entries = append(entries, Entry{State: StateCurrent, Target: record.Target, Destination: record.Destination})
+	}
+	entries = append(entries, plan.changes()...)
+	for _, conflict := range plan.conflicts {
+		entries = append(entries, conflict.entry)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Target == entries[j].Target {
+			return entries[i].State < entries[j].State
+		}
+		return entries[i].Target < entries[j].Target
+	})
+	return Inspection{entries: entries}
+}
+
+func (plan Plan) changes() []Entry {
+	changes := make([]Entry, 0, len(plan.links)+len(plan.stale))
+	for _, link := range plan.links {
+		changes = append(changes, Entry{State: StateMissing, Target: link.Target, Destination: link.Destination})
+	}
+	for _, record := range plan.stale {
+		changes = append(changes, Entry{State: StateStale, Target: record.Target, Destination: record.Destination})
+	}
+	return changes
 }
 
 func walkManagedRoot(root string, walk fs.WalkDirFunc) error {
@@ -214,18 +332,15 @@ func walkManagedRoot(root string, walk fs.WalkDirFunc) error {
 func (plan Plan) Apply(reporter reportstatus.Reporter, dry bool) (Result, error) {
 	result := Result{Current: len(plan.current)}
 	if dry {
-		for _, link := range plan.links {
-			if err := reportf(reporter, "Would link %s -> %s", link.Target, link.Destination); err != nil {
+		for _, change := range plan.changes() {
+			if err := reportf(reporter, "%s", change.PlanDescription()); err != nil {
 				return result, err
 			}
-			result.Created++
-			result.Removed += link.LegacyLinks
 		}
-		for _, record := range plan.stale {
-			if err := reportf(reporter, "Would remove stale link %s", record.Target); err != nil {
-				return result, err
-			}
-			result.Removed++
+		result.Created = len(plan.links)
+		result.Removed = len(plan.stale)
+		for _, link := range plan.links {
+			result.Removed += link.LegacyLinks
 		}
 		return result, nil
 	}

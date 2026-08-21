@@ -8,6 +8,7 @@ can be synchronized through Git.
 
 - [Get started](#get-started)
 - [Apply](#apply)
+- [Inspect before applying](#inspect-before-applying)
 - [Tools](#tools)
 - [Agent skills](#agent-skills)
 - [Aliases](#aliases)
@@ -83,6 +84,39 @@ The accepted values are exactly `tools`, `managed-home`, and `aliases`.
 Repeated values count once. Selected parts keep the default order, regardless
 of flag order. Beyond loading `xoldot.toml`, Apply reads, validates, changes,
 and reports only the selected parts. `--dry` previews the same selection.
+
+## Inspect before applying
+
+Inspect the current Machine without changing it:
+
+```sh
+xoldot status
+```
+
+Status lists each managed home link as current, missing, stale, or conflicting.
+It reports the Alias output as current, missing, safely replaceable, or
+conflicting. It also verifies installed Skill digests and ownership using local
+files.
+
+Status counts declared Tools as unchecked. It does not run their `check`
+commands because those commands are user-authored shell code. It also does not
+run install commands, `npx`, Git operations, or lifecycle scripts.
+
+Show only the pending managed home and Alias work:
+
+```sh
+xoldot diff
+```
+
+Diff prints the link additions and removals that a dry Apply would plan. For an
+owned Alias file that needs replacement, it prints a unified text diff. Missing
+Alias output is reported as a planned creation. Content that xoldot cannot
+safely replace is reported as a conflict.
+
+Both commands are read-only. They do not create the Target home, state
+directories, or output files. Drift and conflicts are successful inspection
+results. Invalid configuration, unreadable paths, and invalid ownership state
+still return an error.
 
 ## Tools
 
@@ -171,6 +205,10 @@ user. Relative paths are saved as absolute paths. Git URLs cannot contain
 embedded credentials or query parameters, so use a Git credential helper for
 authentication.
 
+`xoldot status` checks installed Skill content, companion agents, and Claude
+compatibility links against the ownership data in `skills.toml`. This check is
+local and does not fetch a Skill source.
+
 ## Aliases
 
 Add or update an alias:
@@ -236,12 +274,15 @@ authentication.
 Preview an apply or sync without changing anything:
 
 ```sh
+xoldot status
+xoldot diff
 xoldot apply --dry
 xoldot sync --dry
 ```
 
 Dry Apply does not run selected Tool checks because they are user-authored
-shell commands.
+shell commands. Unlike `xoldot diff`, dry Apply also describes what each
+selected Tool check and installation would do.
 
 ## Overrides and limits
 
