@@ -300,6 +300,55 @@ func TestLinkCreatesSkillDirectoryLinksThroughResolvedParents(t *testing.T) {
 	}
 }
 
+func TestInspectRejectsTargetParentSymlinkOutsideHome(t *testing.T) {
+	root := t.TempDir()
+	configRoot := filepath.Join(root, "config")
+	managed := filepath.Join(configRoot, "files", "home")
+	home := filepath.Join(root, "home")
+	outside := filepath.Join(root, "outside")
+	for _, directory := range []string{managed, home, outside} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(managed, ".config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(managed, ".config", "probe"), []byte("managed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(home, ".config")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Inspect(managed, home, configRoot); err == nil || !strings.Contains(err.Error(), "outside the target home") {
+		t.Fatalf("Inspect() error = %v, want target escape error", err)
+	}
+	if entries, err := os.ReadDir(outside); err != nil || len(entries) != 0 {
+		t.Fatalf("outside directory changed: entries = %v, error = %v", entries, err)
+	}
+}
+
+func TestInspectRejectsManagedStateSymlinkOutsideHome(t *testing.T) {
+	root := t.TempDir()
+	configRoot := filepath.Join(root, "config")
+	managed := filepath.Join(configRoot, "files", "home")
+	home := filepath.Join(root, "home")
+	outside := filepath.Join(root, "outside")
+	for _, directory := range []string{managed, home, outside} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(home, ".local")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Inspect(managed, home, configRoot); err == nil || !strings.Contains(err.Error(), "managed link state path") || !strings.Contains(err.Error(), "outside the target home") {
+		t.Fatalf("Inspect() error = %v, want state escape error", err)
+	}
+}
+
 func TestLinkMigratesLegacyPerFileSkillLinks(t *testing.T) {
 	root := t.TempDir()
 	configRoot := filepath.Join(root, "config")

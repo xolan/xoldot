@@ -125,3 +125,18 @@ enabled = true
 		t.Fatalf("Load() error = %v, want multiple git error", err)
 	}
 }
+
+func TestLoadRejectsUnknownFieldsAndDuplicateShells(t *testing.T) {
+	for _, data := range []string{
+		"unknown = true\n",
+		"[aliases]\nshells = [\"bash\", \"bash\"]\n",
+	} {
+		path := filepath.Join(t.TempDir(), "xoldot.toml")
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Errorf("Load(%q) error = nil", data)
+		}
+	}
+}

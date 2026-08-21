@@ -19,7 +19,10 @@ import (
 	"github.com/xolan/xoldot/internal/urlutil"
 )
 
-const npmPackage = "skills@1.5.23"
+const (
+	npmPackage         = "skills@1.5.23"
+	MinimumNodeVersion = "22.20"
+)
 
 type Command struct {
 	Arguments   []string
@@ -45,7 +48,7 @@ func (ExecRunner) Run(request Command) error {
 	command.Stderr = request.Stderr
 	if err := command.Run(); err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
-			return fmt.Errorf("npx is required; install Node.js 22.20 or newer: %w", err)
+			return fmt.Errorf("npx is required; install Node.js %s or newer: %w", MinimumNodeVersion, err)
 		}
 		return fmt.Errorf("npx %s: %w", formatCommand(request.Arguments), err)
 	}

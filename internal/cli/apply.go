@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -153,11 +152,10 @@ func prepareApply(paths config.Paths, cfg config.Config, selection applySelectio
 		if !slices.Contains(aliasSettings.Shells, shell) {
 			return applyPlan{}, fmt.Errorf("detected shell %q is disabled by aliases.shells", shell)
 		}
-		aliasDir, err := config.ExpandHome(aliasSettings.Dir, home)
+		plan.aliasPath, err = aliases.OutputPath(aliasSettings.Dir, home, paths.Root, shell)
 		if err != nil {
 			return applyPlan{}, err
 		}
-		plan.aliasPath = filepath.Join(aliasDir, "alias."+shell)
 		plan.aliases, err = aliases.Prepare(plan.aliasPath, shell, input.aliases.Aliases)
 		if err != nil {
 			return applyPlan{}, err

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -71,7 +70,7 @@ func (manager Manager) agentSourceRoot(stageRoot, name, source string) (string, 
 	if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("inspect skill source for companion agents: %w", err)
 	}
-	if !isCloneableRepository(source) {
+	if !SourceNeedsGit(source) {
 		return "", nil
 	}
 
@@ -100,25 +99,6 @@ func (manager Manager) agentSourceRoot(stageRoot, name, source string) (string, 
 		return "", err
 	}
 	return destination, nil
-}
-
-func isCloneableRepository(source string) bool {
-	if strings.HasPrefix(source, "git@") || strings.HasPrefix(source, "ssh://") || strings.HasPrefix(source, "git://") {
-		return true
-	}
-	parsed, err := url.Parse(source)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https" && parsed.Scheme != "git+http" && parsed.Scheme != "git+https") {
-		return false
-	}
-	path := strings.TrimSuffix(parsed.Path, "/")
-	if strings.HasSuffix(path, ".git") {
-		return true
-	}
-	if parsed.Host != "github.com" && parsed.Host != "gitlab.com" && parsed.Host != "bitbucket.org" {
-		return false
-	}
-	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	return len(parts) == 2 && parts[0] != "" && parts[1] != ""
 }
 
 func findCompanionAgents(sourceRoot, installedSkill, name string) (string, error) {

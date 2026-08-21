@@ -101,6 +101,11 @@ xoldot-owned link, but does not Apply or Sync. It serializes ownership-ledger
 updates and restores only transaction-owned paths that have not been replaced.
 _Avoid_: Apply, import
 
+**Doctor**:
+A read-only diagnosis of whether a Configuration and Machine meet xoldot's
+operating requirements, with a remedy for each problem.
+_Avoid_: Status, because Doctor checks operating requirements rather than drift
+
 **Sync**:
 Git synchronization of a Configuration repository. It commits Configuration
 changes, rebases from the configured remote branch when present, and pushes,

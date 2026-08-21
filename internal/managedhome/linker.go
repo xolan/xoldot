@@ -55,6 +55,23 @@ type Inspection struct {
 
 type PathFilter func(relative string) bool
 
+type LedgerError struct {
+	path string
+	err  error
+}
+
+func (err *LedgerError) Error() string {
+	return err.err.Error()
+}
+
+func (err *LedgerError) Unwrap() error {
+	return err.err
+}
+
+func (err *LedgerError) Path() string {
+	return err.path
+}
+
 func (inspection Inspection) Entries() []Entry {
 	return append([]Entry(nil), inspection.entries...)
 }
@@ -156,10 +173,10 @@ func prepare(managedRoot, home, configRoot string, include PathFilter) (Plan, er
 
 	previous, err := layout.loadLedger()
 	if err != nil {
-		return Plan{}, err
+		return Plan{}, &LedgerError{path: layout.LedgerPath, err: err}
 	}
 	if err := layout.validateLedger(previous); err != nil {
-		return Plan{}, err
+		return Plan{}, &LedgerError{path: layout.LedgerPath, err: err}
 	}
 
 	var plans []linkPlan
@@ -207,6 +224,9 @@ func prepare(managedRoot, home, configRoot string, include PathFilter) (Plan, er
 			return fmt.Errorf("resolve target directory for %s: %w", target, err)
 		}
 		resolvedTarget := filepath.Join(resolvedParent, filepath.Base(target))
+		if !pathutil.Contains(home, resolvedTarget) && !agentskills.IsReservedManagedHomeSelection(relative) {
+			return fmt.Errorf("target %s resolves outside the target home %s", target, home)
+		}
 		if pathutil.Contains(configRoot, resolvedTarget) || pathutil.Contains(resolvedTarget, managedRoot) {
 			return fmt.Errorf("refusing recursive link %s -> %s", target, source)
 		}

@@ -10,6 +10,7 @@ can be synchronized through Git.
 - [Apply](#apply)
 - [Profiles](#profiles)
 - [Inspect before applying](#inspect-before-applying)
+- [Troubleshoot](#troubleshoot)
 - [Tools](#tools)
 - [Agent skills](#agent-skills)
 - [Aliases](#aliases)
@@ -170,6 +171,43 @@ Both commands are read-only. They do not create the Target home, state
 directories, or output files. Drift and conflicts are successful inspection
 results. Invalid configuration, unreadable paths, and invalid ownership state
 still return an error.
+
+## Troubleshoot
+
+Run Doctor when setup, Apply, Skill management, or Sync cannot proceed:
+
+```sh
+xoldot doctor
+```
+
+Doctor checks all of these in one run:
+
+- `xoldot.toml`, the Tool, Alias, and Skill catalogs, and every Profile parse
+  and validate. Profile checks include inheritance, catalog references, and
+  managed-home members.
+- Configuration paths, managed-link state, and managed home targets stay within
+  their permitted roots and do not create recursion. Skill and Companion-agent
+  paths under `.agents` and `.claude` may use explicit directory redirects for
+  agent compatibility.
+- The managed-link ledger is readable and valid.
+- The detected shell is Bash, Zsh, or Fish and is enabled by `aliases.shells`.
+- `git` is on `PATH` when Sync or a saved Git-backed Skill source needs it.
+- `npx` and Node.js 22.20 or newer are on `PATH` when Skills are declared.
+- A Sync-enabled Configuration is a local Git repository with its configured
+  remote and branch. These checks use local Git state only.
+- Managed home and Alias conflicts are reported through the same ownership
+  inspection used by Status.
+
+Doctor prints errors first, then warnings, then information. Each error or
+warning includes a remedy. Errors return a failing exit status. Managed home
+and Alias conflicts are warnings because they are reportable Machine drift;
+warnings and information do not make Doctor fail.
+
+Doctor is read-only. It may run `node --version` and local read-only Git
+commands. It never runs user-authored Tool checks, invokes `npx`, fetches a Git
+remote, authenticates, installs software, or changes or repairs files. It does
+not test network access, credentials, general operating-system health, or
+whether a generated Alias file is sourced by shell startup files.
 
 ## Tools
 
@@ -341,12 +379,14 @@ rebase, and pushes it. Git provides the author identity and remote
 authentication. Sync always synchronizes the complete Configuration repository
 and does not select a Profile.
 
-Preview inspection, adoption, Apply, or Sync without changing anything:
+Inspect the Machine or preview adoption, Apply, and Sync without changing
+anything:
 
 ```sh
 xoldot status
 xoldot diff
 xoldot adopt ~/.config/git/config --dry
+xoldot doctor
 xoldot apply --dry
 xoldot sync --dry
 ```
