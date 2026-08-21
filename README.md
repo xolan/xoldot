@@ -14,6 +14,7 @@ can be synchronized through Git.
 - [Aliases](#aliases)
 - [Managed home files](#managed-home-files)
 - [Sync](#sync)
+- [Shell completion](#shell-completion)
 - [Overrides and limits](#overrides-and-limits)
 - [Development](#development)
 
@@ -283,6 +284,29 @@ xoldot sync --dry
 Dry Apply does not run selected Tool checks because they are user-authored
 shell commands. Unlike `xoldot diff`, dry Apply also describes what each
 selected Tool check and installation would do.
+
+## Shell completion
+
+`xoldot completion` prints a completion script to standard output. Install the
+script for your shell in its normal user completion directory:
+
+```sh
+# Bash
+mkdir -p ~/.local/share/bash-completion/completions
+xoldot completion bash > ~/.local/share/bash-completion/completions/xoldot
+
+# Zsh
+mkdir -p ~/.zfunc
+xoldot completion zsh > ~/.zfunc/_xoldot
+# Add ~/.zfunc to fpath before calling compinit in ~/.zshrc.
+
+# Fish
+mkdir -p ~/.config/fish/completions
+xoldot completion fish > ~/.config/fish/completions/xoldot.fish
+```
+
+Generation does not create or change files. Redirect the output when you want
+to install it.
 
 ## Overrides and limits
 

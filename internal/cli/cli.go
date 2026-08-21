@@ -69,6 +69,7 @@ func (a *app) rootCommand(version string) *cobra.Command {
   xoldot apply --dry
   xoldot sync --dry`,
 	}
+	root.CompletionOptions.DisableDefaultCmd = true
 	root.PersistentFlags().StringVar(&a.configDir, "config-dir", "", "configuration directory (uses the xoldot default when omitted)")
 	root.PersistentFlags().BoolVarP(&a.verbose, "verbose", "v", false, "log underlying git and npx commands")
 
@@ -209,6 +210,8 @@ func (a *app) rootCommand(version string) *cobra.Command {
 	}
 	syncCommand.Flags().BoolVar(&syncDry, "dry", false, "show what would change without changing it")
 	root.AddCommand(syncCommand)
+
+	root.AddCommand(a.completionCommand(root))
 
 	return root
 }
