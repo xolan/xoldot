@@ -83,6 +83,17 @@ func (manager Manager) Inspect() ([]Inspection, error) {
 	if err != nil {
 		return nil, err
 	}
+	return manager.inspectCatalog(catalog)
+}
+
+func (manager Manager) InspectCatalog(catalog Catalog) ([]Inspection, error) {
+	if err := Validate(catalog); err != nil {
+		return nil, err
+	}
+	return manager.inspectCatalog(catalog)
+}
+
+func (manager Manager) inspectCatalog(catalog Catalog) ([]Inspection, error) {
 	sort.Slice(catalog.Skills, func(i, j int) bool {
 		return catalog.Skills[i].Name < catalog.Skills[j].Name
 	})
@@ -327,11 +338,11 @@ func formatCommand(arguments []string) string {
 }
 
 func (manager Manager) canonicalPath(name string) string {
-	return filepath.Join(manager.ManagedHome, ".agents", "skills", name)
+	return canonicalSkillPath(manager.ManagedHome, name)
 }
 
 func (manager Manager) compatibilityPath(name string) string {
-	return filepath.Join(manager.ManagedHome, ".claude", "skills", name)
+	return compatibilitySkillPath(manager.ManagedHome, name)
 }
 
 func validateManagedPaths(managedHome string, paths ...string) error {

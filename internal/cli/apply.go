@@ -75,6 +75,7 @@ type applyPlan struct {
 func (a *app) applyCommand() *cobra.Command {
 	var dry bool
 	var only []string
+	var profile string
 	command := &cobra.Command{
 		Use:   "apply",
 		Short: "Install tools, link managed home content, and render aliases",
@@ -84,10 +85,11 @@ func (a *app) applyCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return a.apply(dry, selection)
+			return a.apply(dry, selection, profile)
 		},
 	}
 	command.Flags().BoolVar(&dry, "dry", false, "show what would change without changing it")
+	command.Flags().StringVar(&profile, "profile", "", "select one profile before applying")
 	command.Flags().StringArrayVar(
 		&only,
 		"only",
@@ -105,7 +107,7 @@ func (a *app) applyCommand() *cobra.Command {
 	return command
 }
 
-func (a *app) apply(dry bool, selection applySelection) error {
+func (a *app) apply(dry bool, selection applySelection, profile string) error {
 	paths, err := a.paths()
 	if err != nil {
 		return err
@@ -114,21 +116,25 @@ func (a *app) apply(dry bool, selection applySelection) error {
 	if err != nil {
 		return err
 	}
-	plan, err := prepareApply(paths, cfg, selection)
+	input, err := loadConfigurationInput(paths, profile, configurationNeeds{
+		tools:   selection.tools,
+		aliases: selection.aliases,
+	})
+	if err != nil {
+		return err
+	}
+	plan, err := prepareApply(paths, cfg, selection, input)
 	if err != nil {
 		return err
 	}
 	return a.executeApply(plan, dry)
 }
 
-func prepareApply(paths config.Paths, cfg config.Config, selection applySelection) (applyPlan, error) {
+func prepareApply(paths config.Paths, cfg config.Config, selection applySelection, input configurationInput) (applyPlan, error) {
 	plan := applyPlan{selection: selection}
 	var err error
 	if selection.tools {
-		plan.tools, err = toolcatalog.Load(paths.Tools)
-		if err != nil {
-			return applyPlan{}, err
-		}
+		plan.tools = input.tools
 	}
 
 	var home string
@@ -151,18 +157,14 @@ func prepareApply(paths config.Paths, cfg config.Config, selection applySelectio
 		if err != nil {
 			return applyPlan{}, err
 		}
-		file, err := aliases.Load(paths.Aliases)
-		if err != nil {
-			return applyPlan{}, err
-		}
 		plan.aliasPath = filepath.Join(aliasDir, "alias."+shell)
-		plan.aliases, err = aliases.Prepare(plan.aliasPath, shell, file.Aliases)
+		plan.aliases, err = aliases.Prepare(plan.aliasPath, shell, input.aliases.Aliases)
 		if err != nil {
 			return applyPlan{}, err
 		}
 	}
 	if selection.managedHome {
-		plan.managedHome, err = managedhome.Prepare(paths.ManagedHome, home, paths.Root)
+		plan.managedHome, err = managedhome.PrepareSelected(paths.ManagedHome, home, paths.Root, input.managedHomeFilter)
 		if err != nil {
 			return applyPlan{}, err
 		}

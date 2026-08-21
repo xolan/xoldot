@@ -20,6 +20,11 @@ _Avoid_: Config home, xoldot home
 A Configuration directory with Git synchronization enabled.
 _Avoid_: Configuration directory when Git is disabled
 
+**Profile**:
+A named subset of a Configuration for one Machine. A Profile may inherit from
+other Profiles, and it selects declarations without redefining them.
+_Avoid_: Environment, Machine configuration
+
 **Machine**:
 The operating-system environment affected by Apply, including its available
 tools and Target home.

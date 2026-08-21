@@ -22,13 +22,13 @@ func (manager Manager) stageSkill(name, source string) (stagedSkill, error) {
 	if err != nil {
 		return stagedSkill{}, fmt.Errorf("create skill staging directory: %w", err)
 	}
+	managedHome := filepath.Join(root, "home")
 	candidate := stagedSkill{
 		root:          root,
-		canonical:     filepath.Join(root, "home", ".agents", "skills", name),
-		compatibility: filepath.Join(root, "home", ".claude", "skills", name),
+		canonical:     canonicalSkillPath(managedHome, name),
+		compatibility: compatibilitySkillPath(managedHome, name),
 		agents:        make(map[string]struct{}),
 	}
-	managedHome := filepath.Join(root, "home")
 	if err := os.MkdirAll(managedHome, 0o755); err != nil {
 		candidate.cleanup()
 		return stagedSkill{}, fmt.Errorf("create staged managed home: %w", err)
