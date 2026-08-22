@@ -24,11 +24,20 @@ func (a *app) doctor() error {
 	}
 	report := doctor.Check(paths)
 	for _, finding := range report.Findings() {
-		if err := writef(a.output, "%s: %s\n", finding.Severity, finding.Message); err != nil {
+		label := finding.Severity.String() + ":"
+		switch finding.Severity {
+		case doctor.Error:
+			label = a.style.failure(label)
+		case doctor.Warning:
+			label = a.style.warning(label)
+		case doctor.Information:
+			label = a.style.progress(label)
+		}
+		if err := writef(a.output, "%s %s\n", label, finding.Message); err != nil {
 			return err
 		}
 		if finding.Remedy != "" {
-			if err := writef(a.output, "  remedy: %s\n", finding.Remedy); err != nil {
+			if err := writef(a.output, "  %s %s\n", a.style.heading("remedy:"), finding.Remedy); err != nil {
 				return err
 			}
 		}

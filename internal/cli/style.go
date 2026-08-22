@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 
+	"golang.org/x/term"
+
 	"github.com/xolan/xoldot/internal/status"
 )
 
@@ -13,7 +15,20 @@ type styler struct {
 	enabled bool
 }
 
+const (
+	styleBold   = "1"
+	styleMuted  = "2"
+	styleRed    = "31"
+	styleGreen  = "32"
+	styleYellow = "33"
+	styleCyan   = "36"
+)
+
 func newStyler(output io.Writer) styler {
+	return newStylerWithTerminal(output, term.IsTerminal)
+}
+
+func newStylerWithTerminal(output io.Writer, isTerminal func(int) bool) styler {
 	file, ok := output.(*os.File)
 	if !ok {
 		return styler{}
@@ -21,8 +36,7 @@ func newStyler(output io.Writer) styler {
 	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
 		return styler{}
 	}
-	info, err := file.Stat()
-	return styler{enabled: err == nil && info.Mode()&os.ModeCharDevice != 0}
+	return styler{enabled: isTerminal(int(file.Fd()))}
 }
 
 func (style styler) paint(code, text string) string {
@@ -32,7 +46,50 @@ func (style styler) paint(code, text string) string {
 	return "\x1b[" + code + "m" + text + "\x1b[0m"
 }
 
-func (style styler) bold(text string) string { return style.paint("1", text) }
+func (style styler) heading(text string) string  { return style.paint(styleBold, text) }
+func (style styler) bold(text string) string     { return style.heading(text) }
+func (style styler) muted(text string) string    { return style.paint(styleMuted, text) }
+func (style styler) failure(text string) string  { return style.paint(styleRed, text) }
+func (style styler) success(text string) string  { return style.paint(styleGreen, text) }
+func (style styler) warning(text string) string  { return style.paint(styleYellow, text) }
+func (style styler) progress(text string) string { return style.paint(styleCyan, text) }
+
+func (style styler) progressPlan(text string) string {
+	return style.planDescription(text, styleCyan)
+}
+
+func (style styler) warningPlan(text string) string {
+	return style.planDescription(text, styleYellow)
+}
+
+func (style styler) planDescription(text, color string) string {
+	if !style.enabled || text == "" {
+		return text
+	}
+	end := strings.IndexAny(text, " :")
+	if end < 0 {
+		end = len(text)
+	}
+	return style.paint(color, text[:end]) + text[end:]
+}
+
+func (style styler) unifiedDiff(text string) string {
+	if !style.enabled {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	for index, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "+"):
+			lines[index] = style.success(line)
+		case strings.HasPrefix(line, "-"):
+			lines[index] = style.failure(line)
+		case strings.HasPrefix(line, "@@"):
+			lines[index] = style.progress(line)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
 
 type terminalReporter struct {
 	output      io.Writer
@@ -60,20 +117,26 @@ func (reporter terminalReporter) Report(kind status.Kind, text string) error {
 	switch kind {
 	case status.Progress:
 		prefix = "›"
-		color = "36"
+		color = styleCyan
 	case status.Success:
 		prefix = "✓"
-		color = "32"
+		color = styleGreen
 		colorLine = true
 	case status.Warning:
 		prefix = "!"
-		color = "33"
+		color = styleYellow
 		colorLine = true
 	case status.Command:
 		output = reporter.errorOutput
 		style = reporter.errorStyle
 		prefix = "+"
-		color = "2"
+		color = styleMuted
+		colorLine = true
+	case status.Error:
+		output = reporter.errorOutput
+		style = reporter.errorStyle
+		prefix = "✗"
+		color = styleRed
 		colorLine = true
 	default:
 		return fmt.Errorf("unknown status kind %d", kind)
@@ -84,6 +147,11 @@ func (reporter terminalReporter) Report(kind status.Kind, text string) error {
 		return fmt.Errorf("write status output: %w", err)
 	}
 	return nil
+}
+
+func WriteError(output io.Writer, err error) error {
+	reporter := newTerminalReporter(io.Discard, output, styler{})
+	return reporter.Report(status.Error, "xoldot: "+err.Error())
 }
 
 func formatStatus(style styler, color, prefix, text string, colorLine bool) string {

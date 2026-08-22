@@ -197,7 +197,7 @@ func (plan Plan) Apply(stdin io.Reader, stdout, stderr io.Writer, reporter repor
 	missing := make([]Tool, 0, len(plan.catalog.Tools))
 	for _, tool := range plan.catalog.Tools {
 		if commandPasses(plan.shell, tool.Check) {
-			if err := reportf(reporter, "Tool %s is already installed", tool.Name); err != nil {
+			if err := reportf(reporter, reportstatus.Success, "Tool %s is already installed", tool.Name); err != nil {
 				return err
 			}
 			continue
@@ -213,7 +213,7 @@ func (plan Plan) Apply(stdin io.Reader, stdout, stderr io.Writer, reporter repor
 		installations = append(installations, installPlan{tool: tool, command: command})
 	}
 	for _, installation := range installations {
-		if err := reportf(reporter, "Installing tool %s", installation.tool.Name); err != nil {
+		if err := reportf(reporter, reportstatus.Progress, "Installing tool %s", installation.tool.Name); err != nil {
 			return err
 		}
 		command := exec.Command(plan.shell, "-c", installation.command)
@@ -226,31 +226,34 @@ func (plan Plan) Apply(stdin io.Reader, stdout, stderr io.Writer, reporter repor
 		if !commandPasses(plan.shell, installation.tool.Check) {
 			return fmt.Errorf("tool %q still fails its check after installation", installation.tool.Name)
 		}
+		if err := reportf(reporter, reportstatus.Success, "Installed tool %s", installation.tool.Name); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 func preview(catalog Catalog, platform Platform, reporter reportstatus.Reporter) error {
 	for _, tool := range catalog.Tools {
-		if err := reportf(reporter, "Would check tool %s: %s", tool.Name, tool.Check); err != nil {
+		if err := reportf(reporter, reportstatus.Progress, "Would check tool %s: %s", tool.Name, tool.Check); err != nil {
 			return err
 		}
 		install, err := tool.InstallCommand(platform)
 		if err != nil {
-			if writeErr := reportf(reporter, "If tool %s is missing: %v", tool.Name, err); writeErr != nil {
+			if writeErr := reportf(reporter, reportstatus.Progress, "If tool %s is missing: %v", tool.Name, err); writeErr != nil {
 				return writeErr
 			}
 			continue
 		}
-		if err := reportf(reporter, "If tool %s is missing, would run: %s", tool.Name, install); err != nil {
+		if err := reportf(reporter, reportstatus.Progress, "If tool %s is missing, would run: %s", tool.Name, install); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func reportf(reporter reportstatus.Reporter, format string, arguments ...any) error {
-	if err := reportstatus.Reportf(reporter, reportstatus.Progress, format, arguments...); err != nil {
+func reportf(reporter reportstatus.Reporter, kind reportstatus.Kind, format string, arguments ...any) error {
+	if err := reportstatus.Reportf(reporter, kind, format, arguments...); err != nil {
 		return fmt.Errorf("write tool status: %w", err)
 	}
 	return nil

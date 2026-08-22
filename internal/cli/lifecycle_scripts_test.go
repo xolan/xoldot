@@ -46,8 +46,15 @@ printf 'after\n' >> %s`, shellQuote(toolMarker), shellQuote(fixture.managedTarge
 	if got, want := strings.Split(strings.TrimSpace(readTestFile(t, trace)), "\n"), []string{"before", "tool", "after"}; fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("trace = %v, want %v", got, want)
 	}
-	if !strings.Contains(output.String(), "Running lifecycle script before-apply/run_10_before") || !strings.Contains(output.String(), "Running lifecycle script after-apply/run_10_after") {
-		t.Errorf("apply output does not report scripts:\n%s", output.String())
+	for _, want := range []string{
+		"› Running lifecycle script before-apply/run_10_before",
+		"✓ Ran lifecycle script before-apply/run_10_before",
+		"› Running lifecycle script after-apply/run_10_after",
+		"✓ Ran lifecycle script after-apply/run_10_after",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("apply output does not contain %q:\n%s", want, output.String())
+		}
 	}
 	if _, err := os.Stat(filepath.Join(home, ".local", "state", "xoldot", "scripts.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("always-run scripts wrote state: %v", err)

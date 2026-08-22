@@ -96,6 +96,17 @@ command = "exit 23"
 		t.Fatalf("adopt error = %v\noutput:\n%s", err, output.String())
 	}
 	destination := filepath.Join(paths.ManagedHome, ".config", "example", "settings")
+	wantOutput := fmt.Sprintf(
+		"› Moving %s -> %s\n› Linking %s -> %s\n✓ Adopted %s\n",
+		source,
+		destination,
+		source,
+		destination,
+		source,
+	)
+	if output.String() != wantOutput {
+		t.Errorf("output = %q, want %q", output.String(), wantOutput)
+	}
 	if link, err := os.Readlink(source); err != nil || link != destination {
 		t.Errorf("adopted link = %q, %v; want %q", link, err, destination)
 	}

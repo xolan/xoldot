@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -49,8 +50,14 @@ func TestApplyBackupAndRestoreCommands(t *testing.T) {
 	); err != nil {
 		t.Fatalf("dry restore error = %v\n%s", err, output.String())
 	}
-	if !strings.Contains(output.String(), "Would restore 1 managed-home conflicts") {
-		t.Errorf("dry restore output = %q", output.String())
+	wantDryOutput := fmt.Sprintf(
+		"› Would restore %s from backup %s\n› Would restore 1 managed-home conflicts from backup %s\n",
+		fixture.managedTarget,
+		id,
+		id,
+	)
+	if output.String() != wantDryOutput {
+		t.Errorf("dry restore output = %q, want %q", output.String(), wantDryOutput)
 	}
 	if _, err := os.Readlink(fixture.managedTarget); err != nil {
 		t.Fatalf("dry restore changed managed link: %v", err)
@@ -65,6 +72,15 @@ func TestApplyBackupAndRestoreCommands(t *testing.T) {
 		"test",
 	); err != nil {
 		t.Fatalf("restore error = %v\n%s", err, output.String())
+	}
+	wantRestoreOutput := fmt.Sprintf(
+		"› Restoring %s from backup %s\n✓ Restored 1 managed-home conflicts from backup %s\n",
+		fixture.managedTarget,
+		id,
+		id,
+	)
+	if output.String() != wantRestoreOutput {
+		t.Errorf("restore output = %q, want %q", output.String(), wantRestoreOutput)
 	}
 	data, err := os.ReadFile(fixture.managedTarget)
 	if err != nil || string(data) != "local content\n" {

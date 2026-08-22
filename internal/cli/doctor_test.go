@@ -76,3 +76,35 @@ func TestDoctorWarningsDoNotFail(t *testing.T) {
 		t.Errorf("output = %q", output.String())
 	}
 }
+
+func TestDoctorStylesSeverityAndRemedyPrefixesForTerminals(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "config")
+	home := filepath.Join(t.TempDir(), "home")
+	paths := config.NewPaths(root)
+	if err := config.Initialize(paths); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.Tools, []byte("[[tool]]\nname = [\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.TargetHomeEnv, home)
+	t.Setenv("XOLDOT_SHELL", "bash")
+
+	var output bytes.Buffer
+	application := app{configDir: root, output: &output, style: styler{enabled: true}}
+	if err := application.doctor(); err == nil {
+		t.Fatal("doctor error = nil, want invalid Tool catalog error")
+	}
+	for _, want := range []string{
+		"\x1b[31merror:\x1b[0m",
+		"\x1b[1mremedy:\x1b[0m",
+		"\x1b[36minformation:\x1b[0m",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("styled doctor output does not contain %q:\n%s", want, output.String())
+		}
+	}
+}

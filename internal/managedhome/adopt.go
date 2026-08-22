@@ -135,7 +135,7 @@ func (plan AdoptionPlan) apply(
 	hook func(transactionStep) error,
 ) error {
 	if dry {
-		if err := reportf(reporter, "Would move %s -> %s", plan.Source, plan.Destination); err != nil {
+		if err := reportf(reporter, reportstatus.Progress, "Would move %s -> %s", plan.Source, plan.Destination); err != nil {
 			return err
 		}
 		_, err := plan.linkPlan.apply(reporter, true, nil, nil)
@@ -234,7 +234,7 @@ func (plan AdoptionPlan) apply(
 	); err != nil {
 		return fail(fmt.Errorf("verify staged adoption: %w", err))
 	}
-	if err := reportf(reporter, "Moved %s -> %s", plan.Source, plan.Destination); err != nil {
+	if err := reportf(reporter, reportstatus.Progress, "Moving %s -> %s", plan.Source, plan.Destination); err != nil {
 		return fail(err)
 	}
 	if _, err := plan.linkPlan.apply(reporter, false, &transaction, home.root); err != nil {

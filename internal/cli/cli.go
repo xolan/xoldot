@@ -500,7 +500,13 @@ func (a *app) adopt(source string, dry bool) error {
 	if err != nil {
 		return err
 	}
-	return managedhome.Adopt(source, paths.ManagedHome, home, paths.Root, a.reporter, dry)
+	if err := managedhome.Adopt(source, paths.ManagedHome, home, paths.Root, a.reporter, dry); err != nil {
+		return err
+	}
+	if dry {
+		return nil
+	}
+	return a.reportf(status.Success, "Adopted %s", source)
 }
 
 func (a *app) sync(dry bool) error {

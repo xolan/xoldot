@@ -3,6 +3,7 @@ package managedhome
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,13 +30,18 @@ func TestAdoptPreservesBytesAndPermissionsAndRecordsOwnership(t *testing.T) {
 	}
 
 	var output strings.Builder
-	if err := Adopt(source, managed, home, configRoot, writerReporter(&output), false); err != nil {
+	var kinds []status.Kind
+	reporter := recordingReporter(&output, &kinds)
+	if err := Adopt(source, managed, home, configRoot, reporter, false); err != nil {
 		t.Fatalf("Adopt() error = %v", err)
 	}
 	destination := filepath.Join(managed, ".config", "example", "settings")
 	assertAdoptedFile(t, source, destination, contents, 0o751)
-	if got, want := output.String(), fmt.Sprintf("Moved %s -> %s\nLinked %s -> %s\n", source, destination, source, destination); got != want {
+	if got, want := output.String(), fmt.Sprintf("Moving %s -> %s\nLinking %s -> %s\n", source, destination, source, destination); got != want {
 		t.Errorf("output = %q, want %q", got, want)
+	}
+	if len(kinds) != 2 || kinds[0] != status.Progress || kinds[1] != status.Progress {
+		t.Errorf("status kinds = %v, want two progress reports before commit", kinds)
 	}
 	ledger, err := loadLedger(filepath.Join(home, ".local", "state", "xoldot", "links.json"))
 	if err != nil {
@@ -59,12 +65,17 @@ func TestAdoptDryReportsExactMoveAndLinkWithoutChangingTrees(t *testing.T) {
 	}
 
 	var output strings.Builder
-	if err := Adopt(source, managed, home, filepath.Join(root, "configuration"), writerReporter(&output), true); err != nil {
+	var kinds []status.Kind
+	reporter := recordingReporter(&output, &kinds)
+	if err := Adopt(source, managed, home, filepath.Join(root, "configuration"), reporter, true); err != nil {
 		t.Fatalf("Adopt() error = %v", err)
 	}
 	destination := filepath.Join(managed, ".vimrc")
 	if got, want := output.String(), fmt.Sprintf("Would move %s -> %s\nWould link %s -> %s\n", source, destination, source, destination); got != want {
 		t.Errorf("output = %q, want %q", got, want)
+	}
+	if len(kinds) != 2 || kinds[0] != status.Progress || kinds[1] != status.Progress {
+		t.Errorf("status kinds = %v, want two progress reports", kinds)
 	}
 	data, err := os.ReadFile(source)
 	if err != nil || string(data) != "set number\n" {
@@ -296,7 +307,9 @@ func TestAdoptRollsBackEveryTransactionStep(t *testing.T) {
 	for _, step := range steps {
 		t.Run(string(step), func(t *testing.T) {
 			plan, contents, mode := newAdoptionPlan(t)
-			err := plan.apply(discardReporter, false, func(current transactionStep) error {
+			var kinds []status.Kind
+			reporter := recordingReporter(io.Discard, &kinds)
+			err := plan.apply(reporter, false, func(current transactionStep) error {
 				if current == step {
 					return fmt.Errorf("simulated %s failure", step)
 				}
@@ -305,9 +318,22 @@ func TestAdoptRollsBackEveryTransactionStep(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "simulated") {
 				t.Fatalf("Apply() error = %v", err)
 			}
+			for _, kind := range kinds {
+				if kind == status.Success {
+					t.Errorf("rollback path reported success: %v", kinds)
+				}
+			}
 			assertRestoredAdoption(t, plan, contents, mode)
 		})
 	}
+}
+
+func recordingReporter(output io.Writer, kinds *[]status.Kind) status.Reporter {
+	reporter := writerReporter(output)
+	return status.ReporterFunc(func(kind status.Kind, text string) error {
+		*kinds = append(*kinds, kind)
+		return reporter.Report(kind, text)
+	})
 }
 
 func TestAdoptRollsBackStatusWriteFailures(t *testing.T) {

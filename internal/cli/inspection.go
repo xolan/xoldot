@@ -153,70 +153,80 @@ func (a *app) machineStatus(profile string) error {
 	if err != nil {
 		return err
 	}
-	if err := write(a.output, "Managed home:\n"); err != nil {
+	if err := writef(a.output, "%s\n", a.style.heading("Managed home:")); err != nil {
 		return err
 	}
 	if len(inspection.managedHome) == 0 {
-		if err := write(a.output, "  no content declared\n"); err != nil {
+		if err := writef(a.output, "  %s\n", a.style.muted("no content declared")); err != nil {
 			return err
 		}
 	}
 	for _, item := range inspection.managedHome {
 		if item.State == managedhome.StateConflict {
 			if item.EligibleForBackup {
-				if err := writef(a.output, "  eligible backup conflict %s: %s\n", item.Target, item.Problem); err != nil {
+				if err := writef(a.output, "  %s %s: %s\n", a.style.warning("eligible backup conflict"), item.Target, item.Problem); err != nil {
 					return err
 				}
 				continue
 			}
-			if err := writef(a.output, "  conflict %s: %s\n", item.Target, item.Problem); err != nil {
+			if err := writef(a.output, "  %s %s: %s\n", a.style.warning("conflict"), item.Target, item.Problem); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := writef(a.output, "  %s %s -> %s\n", item.State, item.Target, item.Destination); err != nil {
+		state := styleManagedHomeState(a.style, item.State)
+		if err := writef(a.output, "  %s %s -> %s\n", state, item.Target, item.Destination); err != nil {
 			return err
 		}
 	}
 	if len(inspection.backups) > 0 {
-		if err := write(a.output, "Backups:\n"); err != nil {
+		if err := writef(a.output, "%s\n", a.style.heading("Backups:")); err != nil {
 			return err
 		}
 		for _, backup := range inspection.backups {
+			state := styleBackupState(a.style, backup.State)
 			if backup.Problem == "" {
-				if err := writef(a.output, "  %s %s\n", backup.State, backup.ID); err != nil {
+				if err := writef(a.output, "  %s %s\n", state, backup.ID); err != nil {
 					return err
 				}
 				continue
 			}
-			if err := writef(a.output, "  %s %s: %s\n", backup.State, backup.ID, backup.Problem); err != nil {
+			if err := writef(a.output, "  %s %s: %s\n", state, backup.ID, backup.Problem); err != nil {
 				return err
 			}
 		}
 	}
-	if inspection.alias.State == aliases.StateConflict {
-		if err := writef(a.output, "Aliases:\n  conflict: %s", inspection.alias.Problem); err != nil {
+	switch inspection.alias.State {
+	case aliases.StateConflict:
+		if err := writef(a.output, "%s\n  %s: %s", a.style.heading("Aliases:"), a.style.warning("conflict"), inspection.alias.Problem); err != nil {
 			return err
 		}
-	} else if err := writef(a.output, "Aliases:\n  %s %s", inspection.alias.State, inspection.alias.Path); err != nil {
-		return err
+	default:
+		state := styleAliasState(a.style, inspection.alias.State)
+		if err := writef(a.output, "%s\n  %s %s", a.style.heading("Aliases:"), state, inspection.alias.Path); err != nil {
+			return err
+		}
 	}
-	if err := write(a.output, "\nSkills:\n"); err != nil {
+	if err := writef(a.output, "\n%s\n", a.style.heading("Skills:")); err != nil {
 		return err
 	}
 	if len(inspection.skills) == 0 {
-		if err := write(a.output, "  none declared\n"); err != nil {
+		if err := writef(a.output, "  %s\n", a.style.muted("none declared")); err != nil {
 			return err
 		}
 	}
 	for _, skill := range inspection.skills {
 		if skill.State == agentskills.InspectionProblem {
-			if err := writef(a.output, "  problem %s: %s\n", skill.Name, skill.Problem); err != nil {
+			if err := writef(a.output, "  %s %s: %s\n", a.style.failure("problem"), skill.Name, skill.Problem); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := writef(a.output, "  current %s\n", skill.Name); err != nil {
+		state := string(skill.State)
+		if skill.State == agentskills.InspectionCurrent {
+			state = a.style.success(state)
+		}
+		if err := writef(a.output, "  %s %s\n", state, skill.Name); err != nil {
 			return err
 		}
 	}
@@ -226,7 +236,9 @@ func (a *app) machineStatus(profile string) error {
 	}
 	if err := writef(
 		a.output,
-		"Tools:\n  unchecked %d declared %s; checks were not run because status is read-only and tool checks are user-authored commands\n",
+		"%s\n  %s %d declared %s; checks were not run because status is read-only and tool checks are user-authored commands\n",
+		a.style.heading("Tools:"),
+		a.style.muted("unchecked"),
 		inspection.tools,
 		toolNoun,
 	); err != nil {
@@ -235,17 +247,56 @@ func (a *app) machineStatus(profile string) error {
 	if len(inspection.beforeScripts) == 0 && len(inspection.afterScripts) == 0 {
 		return nil
 	}
-	if err := write(a.output, "Lifecycle scripts:\n"); err != nil {
+	if err := writef(a.output, "%s\n", a.style.heading("Lifecycle scripts:")); err != nil {
 		return err
 	}
 	for _, scripts := range [][]lifecyclescripts.Entry{inspection.beforeScripts, inspection.afterScripts} {
 		for _, script := range scripts {
-			if err := writef(a.output, "  would run %s\n", script.Path); err != nil {
+			if err := writef(a.output, "  %s %s\n", a.style.progress("would run"), script.Path); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func styleManagedHomeState(style styler, state managedhome.State) string {
+	switch state {
+	case managedhome.StateCurrent:
+		return style.success(string(state))
+	case managedhome.StateMissing:
+		return style.progress(string(state))
+	case managedhome.StateStale:
+		return style.warning(string(state))
+	default:
+		return string(state)
+	}
+}
+
+func styleBackupState(style styler, state managedhome.BackupState) string {
+	switch state {
+	case managedhome.BackupReady:
+		return style.success(string(state))
+	case managedhome.BackupIncomplete:
+		return style.warning(string(state))
+	case managedhome.BackupInvalid:
+		return style.failure(string(state))
+	default:
+		return string(state)
+	}
+}
+
+func styleAliasState(style styler, state aliases.State) string {
+	switch state {
+	case aliases.StateCurrent:
+		return style.success(string(state))
+	case aliases.StateMissing:
+		return style.progress(string(state))
+	case aliases.StateReplaceable:
+		return style.warning(string(state))
+	default:
+		return string(state)
+	}
 }
 
 func (a *app) machineDiff(profile string) error {
@@ -256,14 +307,18 @@ func (a *app) machineDiff(profile string) error {
 	reported := false
 	for _, script := range inspection.beforeScripts {
 		reported = true
-		if err := writef(a.output, "Would run lifecycle script %s\n", script.Path); err != nil {
+		if err := writef(a.output, "%s\n", a.style.progressPlan(fmt.Sprintf("Would run lifecycle script %s", script.Path))); err != nil {
 			return err
 		}
 	}
 	for _, item := range inspection.managedHome {
 		if description := item.PlanDescription(); description != "" {
 			reported = true
-			if err := writef(a.output, "%s\n", description); err != nil {
+			stylePlan := a.style.progressPlan
+			if item.State == managedhome.StateConflict {
+				stylePlan = a.style.warningPlan
+			}
+			if err := writef(a.output, "%s\n", stylePlan(description)); err != nil {
 				return err
 			}
 		}
@@ -271,28 +326,28 @@ func (a *app) machineDiff(profile string) error {
 	switch inspection.alias.State {
 	case aliases.StateMissing:
 		reported = true
-		if err := writef(a.output, "Would create alias output %s\n", inspection.alias.Path); err != nil {
+		if err := writef(a.output, "%s\n", a.style.progressPlan(fmt.Sprintf("Would create alias output %s", inspection.alias.Path))); err != nil {
 			return err
 		}
 	case aliases.StateReplaceable:
 		reported = true
-		if err := write(a.output, inspection.alias.UnifiedDiff()); err != nil {
+		if err := write(a.output, a.style.unifiedDiff(inspection.alias.UnifiedDiff())); err != nil {
 			return err
 		}
 	case aliases.StateConflict:
 		reported = true
-		if err := writef(a.output, "Conflict: %s\n", inspection.alias.Problem); err != nil {
+		if err := writef(a.output, "%s\n", a.style.warningPlan("Conflict: "+inspection.alias.Problem)); err != nil {
 			return err
 		}
 	}
 	for _, script := range inspection.afterScripts {
 		reported = true
-		if err := writef(a.output, "Would run lifecycle script %s\n", script.Path); err != nil {
+		if err := writef(a.output, "%s\n", a.style.progressPlan(fmt.Sprintf("Would run lifecycle script %s", script.Path))); err != nil {
 			return err
 		}
 	}
 	if !reported {
-		return write(a.output, "No managed home or Alias changes.\n")
+		return writef(a.output, "%s\n", a.style.success("No managed home or Alias changes."))
 	}
 	return nil
 }

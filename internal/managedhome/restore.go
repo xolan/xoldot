@@ -86,7 +86,7 @@ func (plan RestorePlan) apply(
 	result := RestoreResult{Restored: len(plan.manifest.Entries)}
 	if dry {
 		for _, record := range plan.manifest.Entries {
-			if err := reportf(reporter, "Would restore %s from backup %s", record.Original, plan.manifest.ID); err != nil {
+			if err := reportf(reporter, reportstatus.Progress, "Would restore %s from backup %s", record.Original, plan.manifest.ID); err != nil {
 				return RestoreResult{}, err
 			}
 		}
@@ -115,6 +115,9 @@ func (plan RestorePlan) apply(
 
 	transaction := linkTransaction{hook: hook}
 	for index, record := range manifest.Entries {
+		if err := reportf(reporter, reportstatus.Progress, "Restoring %s from backup %s", record.Original, plan.manifest.ID); err != nil {
+			return RestoreResult{}, plan.restoreFailure(err, &transaction, home)
+		}
 		original, err := plan.layout.homeRelative(record.Original)
 		if err != nil {
 			return RestoreResult{}, plan.restoreFailure(err, &transaction, home)
@@ -130,9 +133,6 @@ func (plan RestorePlan) apply(
 			return RestoreResult{}, plan.restoreFailure(err, &transaction, home)
 		}
 		if err := transaction.after(transactionStepBackupRestored); err != nil {
-			return RestoreResult{}, plan.restoreFailure(err, &transaction, home)
-		}
-		if err := reportf(reporter, "Restored %s", record.Original); err != nil {
 			return RestoreResult{}, plan.restoreFailure(err, &transaction, home)
 		}
 	}

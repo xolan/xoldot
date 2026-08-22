@@ -7,6 +7,7 @@ files linked into your home directory. Its configuration lives in
 ## Table of contents
 
 - [Get started](#get-started)
+- [Output](#output)
 - [Apply](#apply)
 - [Lifecycle scripts](#lifecycle-scripts)
 - [Profiles](#profiles)
@@ -71,6 +72,27 @@ shells = ["bash", "zsh", "fish"]
 ```
 
 Use `--verbose` or `-v` to print the Git and `npx` commands that xoldot runs.
+
+## Output
+
+xoldot uses stable prefixes for its own messages:
+
+- `›` for work in progress and dry-run plans
+- `✓` for completed work
+- `!` for warnings
+- `✗` for command errors on standard error
+- `+` for underlying Git and `npx` commands shown by `--verbose`
+
+When the destination is a terminal, xoldot colors those prefixes and messages.
+Status and Doctor also color state and severity words such as `current`,
+`conflict`, `error:`, and `warning:`. Diff colors plan keywords and unified-diff
+lines. `NO_COLOR` or `TERM=dumb` disables ANSI styling without removing the
+text prefixes.
+
+Output from Git, `npx`, lifecycle scripts, and Tool installers passes through
+unchanged. Commands that return data, including `version`, `tool list`, `skill
+list`, and `completion`, stay prefix-free so their output can be redirected or
+parsed.
 
 ## Apply
 
@@ -550,7 +572,7 @@ to install it.
 
 - `--config-dir DIR` or `XOLDOT_CONFIG_HOME` changes the configuration
   directory.
-- `NO_COLOR` or `TERM=dumb` disables color.
+- Color controls are documented under [Output](#output).
 
 Force deletion and shells other than Bash, Zsh, and Fish are not supported.
 Profiles cannot select themselves from a hostname, operating system,

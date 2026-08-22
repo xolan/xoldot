@@ -9,6 +9,7 @@ const (
 	Success
 	Warning
 	Command
+	Error
 )
 
 type Reporter interface {

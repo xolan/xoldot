@@ -74,8 +74,8 @@ func TestApplyWithoutOnlyRunsAllPartsInOrder(t *testing.T) {
 	}
 
 	want := fmt.Sprintf(
-		"› Tool probe is already installed\n"+
-			"› Linked %s -> %s\n"+
+		"✓ Tool probe is already installed\n"+
+			"› Linking %s -> %s\n"+
 			"✓ Managed home links: 1 created, 0 removed, 0 already current\n"+
 			"✓ Rendered aliases to %s\n",
 		fixture.managedTarget,

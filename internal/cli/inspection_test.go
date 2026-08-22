@@ -10,7 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/xolan/xoldot/internal/aliases"
 	"github.com/xolan/xoldot/internal/config"
+	"github.com/xolan/xoldot/internal/managedhome"
 )
 
 func TestStatusReportsMachineStateAndUncheckedTools(t *testing.T) {
@@ -64,6 +66,51 @@ func TestDiffPrintsPlannedLinksAndAliasCreation(t *testing.T) {
 	)
 	if output.String() != want {
 		t.Errorf("diff output = %q, want %q", output.String(), want)
+	}
+}
+
+func TestStatusAndDiffStyleSemanticPrefixesForTerminals(t *testing.T) {
+	root, _ := inspectionFixture(t)
+	paths := config.NewPaths(root)
+	if err := os.WriteFile(filepath.Join(paths.ManagedHome, ".vimrc"), []byte("managed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	application := app{configDir: root, output: &output, style: styler{enabled: true}}
+	if err := application.machineStatus(""); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"\x1b[1mManaged home:\x1b[0m",
+		"\x1b[36mmissing\x1b[0m",
+		"\x1b[2mnone declared\x1b[0m",
+		"\x1b[2munchecked\x1b[0m",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("styled status does not contain %q:\n%s", want, output.String())
+		}
+	}
+
+	output.Reset()
+	if err := application.machineDiff(""); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "\x1b[36mWould\x1b[0m link") {
+		t.Errorf("styled diff has no progress prefix:\n%s", output.String())
+	}
+}
+
+func TestStatusLeavesUnknownStatesUnstyled(t *testing.T) {
+	style := styler{enabled: true}
+	for name, got := range map[string]string{
+		"managed home": styleManagedHomeState(style, managedhome.State("future")),
+		"backup":       styleBackupState(style, managedhome.BackupState("future")),
+		"alias":        styleAliasState(style, aliases.State("future")),
+	} {
+		if got != "future" {
+			t.Errorf("%s unknown state = %q, want unstyled state", name, got)
+		}
 	}
 }
 

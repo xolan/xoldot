@@ -150,17 +150,17 @@ func (refusal *PreparationRefusal) Unwrap() error {
 
 func (refusal *PreparationRefusal) Preview(reporter reportstatus.Reporter) error {
 	for _, backup := range refusal.backups {
-		if err := reportf(reporter, "Would back up %s before linking", backup.Target); err != nil {
+		if err := reportf(reporter, reportstatus.Progress, "Would back up %s before linking", backup.Target); err != nil {
 			return err
 		}
 	}
 	for _, change := range refusal.changes {
-		if err := reportf(reporter, "%s", change.PlanDescription()); err != nil {
+		if err := reportf(reporter, reportstatus.Progress, "%s", change.PlanDescription()); err != nil {
 			return err
 		}
 	}
 	for _, conflict := range refusal.conflicts {
-		if err := reportf(reporter, "%s", conflict.PlanDescription()); err != nil {
+		if err := reportf(reporter, reportstatus.Warning, "%s", conflict.PlanDescription()); err != nil {
 			return err
 		}
 	}
@@ -483,13 +483,13 @@ func (plan Plan) apply(
 	if dry {
 		for _, link := range plan.links {
 			if link.BackupConflict {
-				if err := reportf(reporter, "Would back up %s before linking", link.Target); err != nil {
+				if err := reportf(reporter, reportstatus.Progress, "Would back up %s before linking", link.Target); err != nil {
 					return result, err
 				}
 			}
 		}
 		for _, change := range plan.changes() {
-			if err := reportf(reporter, "%s", change.PlanDescription()); err != nil {
+			if err := reportf(reporter, reportstatus.Progress, "%s", change.PlanDescription()); err != nil {
 				return result, err
 			}
 		}
@@ -536,13 +536,13 @@ func (plan Plan) apply(
 		if err := plan.makeTargetDirectories(homeRoot, transaction, link.Target); err != nil {
 			return result, fmt.Errorf("create target directory for %s: %w", link.Target, err)
 		}
+		if err := reportf(reporter, reportstatus.Progress, "Linking %s -> %s", link.Target, link.Destination); err != nil {
+			return result, err
+		}
 		if err := plan.createTargetSymlink(homeRoot, transaction, link.linkRecord); err != nil {
 			return result, fmt.Errorf("link %s to %s: %w", link.Target, link.Destination, err)
 		}
 		if err := transaction.after(transactionStepLinkCreated); err != nil {
-			return result, err
-		}
-		if err := reportf(reporter, "Linked %s -> %s", link.Target, link.Destination); err != nil {
 			return result, err
 		}
 		result.Created++
@@ -555,11 +555,11 @@ func (plan Plan) apply(
 		if !owned {
 			continue
 		}
+		if err := reportf(reporter, reportstatus.Progress, "Removing stale link %s", record.Target); err != nil {
+			return result, err
+		}
 		if err := plan.removeTargetSymlink(homeRoot, transaction, record); err != nil {
 			return result, fmt.Errorf("remove stale managed link %s: %w", record.Target, err)
-		}
-		if err := reportf(reporter, "Removed stale link %s", record.Target); err != nil {
-			return result, err
 		}
 		result.Removed++
 	}
@@ -723,8 +723,8 @@ func legacySkillDirectory(target string, previous linkLedger) (int, bool, error)
 	return links, true, nil
 }
 
-func reportf(reporter reportstatus.Reporter, format string, arguments ...any) error {
-	if err := reportstatus.Reportf(reporter, reportstatus.Progress, format, arguments...); err != nil {
+func reportf(reporter reportstatus.Reporter, kind reportstatus.Kind, format string, arguments ...any) error {
+	if err := reportstatus.Reportf(reporter, kind, format, arguments...); err != nil {
 		return fmt.Errorf("write link status: %w", err)
 	}
 	return nil

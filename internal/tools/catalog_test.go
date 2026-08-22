@@ -82,7 +82,7 @@ func TestApplyInstallsMissingToolAndRechecks(t *testing.T) {
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("install command did not create marker: %v", err)
 	}
-	if !strings.Contains(output.String(), "Installing tool example") {
+	if !strings.Contains(output.String(), "Installing tool example") || !strings.Contains(output.String(), "Installed tool example") {
 		t.Errorf("output = %q", output.String())
 	}
 }
@@ -130,11 +130,15 @@ func TestApplyKeepsInstallerOutputSeparateFromStatus(t *testing.T) {
 		}},
 	}}}
 	var childOutput bytes.Buffer
-	var gotKind status.Kind
-	var gotText string
+	var reports []struct {
+		kind status.Kind
+		text string
+	}
 	reporter := status.ReporterFunc(func(kind status.Kind, text string) error {
-		gotKind = kind
-		gotText = text
+		reports = append(reports, struct {
+			kind status.Kind
+			text string
+		}{kind: kind, text: text})
 		return nil
 	})
 
@@ -153,8 +157,10 @@ func TestApplyKeepsInstallerOutputSeparateFromStatus(t *testing.T) {
 	if got, want := childOutput.String(), "child output\n"; got != want {
 		t.Errorf("child output = %q, want %q", got, want)
 	}
-	if gotKind != status.Progress || gotText != "Installing tool example" {
-		t.Errorf("reported (%d, %q)", gotKind, gotText)
+	if len(reports) != 2 ||
+		reports[0].kind != status.Progress || reports[0].text != "Installing tool example" ||
+		reports[1].kind != status.Success || reports[1].text != "Installed tool example" {
+		t.Errorf("reports = %+v", reports)
 	}
 }
 

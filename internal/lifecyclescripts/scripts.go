@@ -277,7 +277,7 @@ func (script script) eligible(state scriptState) bool {
 
 func (plan Plan) Preview(phase Phase, reporter reportstatus.Reporter) error {
 	for _, entry := range plan.Eligible(phase) {
-		if err := reportf(reporter, "Would run lifecycle script %s", entry.Path); err != nil {
+		if err := reportf(reporter, reportstatus.Progress, "Would run lifecycle script %s", entry.Path); err != nil {
 			return err
 		}
 	}
@@ -291,26 +291,33 @@ func (plan *Plan) Run(
 	reporter reportstatus.Reporter,
 ) error {
 	for _, prepared := range plan.scripts[phase] {
+		ran := false
 		if prepared.mode == modeAlways {
 			if err := plan.runScript(prepared, stdin, stdout, stderr, reporter); err != nil {
 				return err
 			}
-			continue
-		}
-
-		state, err := plan.store.withLockedState(func(transaction *stateTransaction) error {
-			if !prepared.eligible(transaction.state) {
+			ran = true
+		} else {
+			state, err := plan.store.withLockedState(func(transaction *stateTransaction) error {
+				if !prepared.eligible(transaction.state) {
+					return nil
+				}
+				if err := plan.runScript(prepared, stdin, stdout, stderr, reporter); err != nil {
+					return err
+				}
+				transaction.recordSuccess(prepared.relative, prepared.digest)
+				ran = true
 				return nil
-			}
-			if err := plan.runScript(prepared, stdin, stdout, stderr, reporter); err != nil {
+			})
+			plan.state = state
+			if err != nil {
 				return err
 			}
-			transaction.recordSuccess(prepared.relative, prepared.digest)
-			return nil
-		})
-		plan.state = state
-		if err != nil {
-			return err
+		}
+		if ran {
+			if err := reportf(reporter, reportstatus.Success, "Ran lifecycle script %s", prepared.relative); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -327,7 +334,7 @@ func (plan Plan) runScript(
 		return err
 	}
 	defer func() { _ = file.Close() }()
-	if err := reportf(reporter, "Running lifecycle script %s", prepared.relative); err != nil {
+	if err := reportf(reporter, reportstatus.Progress, "Running lifecycle script %s", prepared.relative); err != nil {
 		return err
 	}
 	// The first ExtraFiles entry is inherited as file descriptor 3.
@@ -434,8 +441,8 @@ func scriptEnvironment(settings Environment) []string {
 	return environment
 }
 
-func reportf(reporter reportstatus.Reporter, format string, arguments ...any) error {
-	if err := reportstatus.Reportf(reporter, reportstatus.Progress, format, arguments...); err != nil {
+func reportf(reporter reportstatus.Reporter, kind reportstatus.Kind, format string, arguments ...any) error {
+	if err := reportstatus.Reportf(reporter, kind, format, arguments...); err != nil {
 		return fmt.Errorf("write lifecycle script status: %w", err)
 	}
 	return nil
