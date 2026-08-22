@@ -407,6 +407,16 @@ func TestHelpIncludesSkillCommands(t *testing.T) {
 	}
 }
 
+func TestHelpIncludesSelfUpdateCommand(t *testing.T) {
+	var output bytes.Buffer
+	if err := Run([]string{"self-update", "--help"}, bytes.NewReader(nil), &output, &output, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "Update xoldot itself") {
+		t.Errorf("help does not describe self-update:\n%s", output.String())
+	}
+}
+
 func seedRemote(t *testing.T) string {
 	t.Helper()
 	remote := filepath.Join(t.TempDir(), "remote.git")

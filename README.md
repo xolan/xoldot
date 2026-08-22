@@ -7,6 +7,7 @@ files linked into your home directory. Its configuration lives in
 ## Table of contents
 
 - [Install](#install)
+- [Self-update](#self-update)
 - [Get started](#get-started)
 - [Output](#output)
 - [Apply](#apply)
@@ -46,6 +47,34 @@ Make sure `~/.local/bin` is on `PATH`, then check the installed version:
 ```sh
 xoldot version
 ```
+
+## Self-update
+
+Update xoldot in place:
+
+```sh
+xoldot self-update
+```
+
+A release binary has a stable version in the `vMAJOR.MINOR.PATCH` form. For
+these binaries, Self-update checks the latest published GitHub Release. If its
+version is newer, xoldot downloads the archive for the current operating system
+and architecture along with `SHA256SUMS`, verifies the archive, and atomically
+replaces the running executable. The executable's directory must be writable.
+The command does not install an older version, and it stops without changing
+the executable when the Release has no matching asset or checksum.
+
+Development and CI builds have versions such as `dev` or `ci-<commit>`. For
+these builds, run Self-update from anywhere inside the xoldot source checkout.
+It verifies the checkout, finds its current branch, and runs:
+
+```sh
+git pull --ff-only origin <current-branch>
+```
+
+This source mode only updates the checkout. It does not rebuild or reinstall
+xoldot. It refuses a detached HEAD, a non-xoldot repository, or a pull that
+cannot fast-forward.
 
 ## Get started
 

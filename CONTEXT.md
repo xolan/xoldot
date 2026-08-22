@@ -137,6 +137,11 @@ changes, rebases from the configured remote branch when present, and pushes,
 but does not Apply the Configuration.
 _Avoid_: Apply
 
+**Self-update**:
+The operation that updates xoldot itself, separate from updating a
+Configuration or Skill.
+_Avoid_: Sync, Skill update
+
 **Xoldot-owned content**:
 Content that xoldot created or installed and can still verify as unchanged.
 xoldot may replace or remove only content it owns; other existing content is a

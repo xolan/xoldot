@@ -2,6 +2,7 @@ package gitops
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -14,12 +15,44 @@ import (
 )
 
 type Runner struct {
+	Context    context.Context
 	Dir        string
 	Executable string
 	Stdout     io.Writer
 	Stderr     io.Writer
 	Verbose    bool
 	Reporter   reportstatus.Reporter
+}
+
+func (runner Runner) Root() (string, error) {
+	root, err := runner.output("rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", fmt.Errorf("find Git repository root: %w", err)
+	}
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return "", errors.New("git repository root is empty")
+	}
+	return root, nil
+}
+
+func (runner Runner) CurrentBranch() (string, error) {
+	branch, err := runner.output("symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("read current Git branch: %w", err)
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return "", errors.New("current Git branch is empty")
+	}
+	return branch, nil
+}
+
+func (runner Runner) PullFastForward(remote, branch string) error {
+	if strings.TrimSpace(remote) == "" || strings.TrimSpace(branch) == "" {
+		return errors.New("git remote and branch cannot be empty")
+	}
+	return runner.run("pull", "--ff-only", remote, branch)
 }
 
 type LocalInspection struct {
@@ -146,7 +179,7 @@ func (runner Runner) syncDry(remote, branch string) error {
 
 func (runner Runner) reportf(kind reportstatus.Kind, format string, arguments ...any) error {
 	if err := reportstatus.Reportf(runner.Reporter, kind, format, arguments...); err != nil {
-		return fmt.Errorf("write sync status: %w", err)
+		return fmt.Errorf("write Git status: %w", err)
 	}
 	return nil
 }
@@ -273,7 +306,12 @@ func (runner Runner) command(arguments ...string) *exec.Cmd {
 	if executable == "" {
 		executable = "git"
 	}
-	command := exec.Command(executable, arguments...)
+	var command *exec.Cmd
+	if runner.Context == nil {
+		command = exec.Command(executable, arguments...)
+	} else {
+		command = exec.CommandContext(runner.Context, executable, arguments...)
+	}
 	command.Dir = runner.Dir
 	return command
 }
