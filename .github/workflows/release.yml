@@ -1,15 +1,17 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  release:
+    types: [published]
 
 permissions:
   contents: read
 
+env:
+  VERSION: ${{ github.event.release.tag_name }}
+
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event.release.id }}
   cancel-in-progress: false
 
 jobs:
@@ -20,11 +22,11 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          ref: ${{ env.VERSION }}
       - name: Install mise tools
         uses: jdx/mise-action@v4
       - name: Validate release tag
-        env:
-          VERSION: ${{ github.ref_name }}
         run: |
           if [[ ! "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "release tag must match vMAJOR.MINOR.PATCH" >&2
@@ -47,10 +49,11 @@ jobs:
       CGO_ENABLED: "0"
       GOARCH: ${{ matrix.goarch }}
       GOOS: ${{ matrix.goos }}
-      VERSION: ${{ github.ref_name }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          ref: ${{ env.VERSION }}
       - name: Install mise tools
         uses: jdx/mise-action@v4
       - name: Build archive
@@ -73,7 +76,6 @@ jobs:
     env:
       GH_REPO: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
-      VERSION: ${{ github.ref_name }}
     steps:
       - name: Download archives
         uses: actions/download-artifact@v8
@@ -85,11 +87,5 @@ jobs:
         run: |
           cd dist
           LC_ALL=C sha256sum ./*.tar.gz > SHA256SUMS
-      - name: Publish GitHub Release
-        run: |
-          gh release create "$VERSION" dist/* \
-            --draft \
-            --generate-notes \
-            --title "$VERSION" \
-            --verify-tag
-          gh release edit "$VERSION" --draft=false
+      - name: Upload release assets
+        run: gh release upload "$VERSION" dist/* --clobber

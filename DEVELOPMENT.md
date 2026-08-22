@@ -29,18 +29,16 @@ with the version, operating system, and architecture in their names.
 
 ## Publish a release
 
-Release tags must use the stable `vMAJOR.MINOR.PATCH` form. After the target
-commit has passed CI on `main`, create and push an annotated tag:
+After the target commit has passed CI on `main`, create a GitHub Release. Select
+or create a tag using the stable `vMAJOR.MINOR.PATCH` form, target the intended
+commit, write the release notes, and publish it.
 
-```sh
-git tag -a v0.1.0 -m "xoldot v0.1.0"
-git push origin v0.1.0
-```
+Publishing the Release starts the release workflow. It checks out the selected
+tag, runs all repository checks, then cross-compiles Linux and macOS archives
+for `amd64` and `arm64` with `CGO_ENABLED=0`. The final job uploads those
+archives and `SHA256SUMS` to the same GitHub Release. The tag is also the version
+reported by `xoldot version`.
 
-The release workflow runs all repository checks. It then cross-compiles Linux
-and macOS archives for `amd64` and `arm64` with `CGO_ENABLED=0`. The publish job
-creates a GitHub Release containing those archives and `SHA256SUMS`. The tag is
-also the version reported by `xoldot version`.
-
-The workflow rejects other tag forms. A failed verification or build does not
-publish a release.
+The workflow rejects other tag forms. A failed verification or build leaves the
+published Release without generated assets; rerun the failed workflow after
+fixing the problem.
