@@ -44,19 +44,18 @@ jobs:
         run: mise run test
 
   build:
-    name: Build / ${{ matrix.platform }}
+    name: Build / ${{ matrix.goos }}-amd64
     needs: test
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            platform: linux
-          - os: macos-latest
-            platform: macos
+        goos: [linux, darwin]
     env:
+      CGO_ENABLED: "0"
+      GOARCH: amd64
+      GOOS: ${{ matrix.goos }}
       VERSION: ci-${{ github.sha }}
     steps:
       - name: Check out repository
@@ -68,7 +67,7 @@ jobs:
       - name: Upload package
         uses: actions/upload-artifact@v7
         with:
-          name: xoldot-${{ matrix.platform }}
-          path: dist/xoldot-${{ env.VERSION }}.tar.gz
+          name: xoldot-${{ matrix.goos }}-amd64
+          path: dist/xoldot-${{ env.VERSION }}-${{ matrix.goos }}-amd64.tar.gz
           if-no-files-found: error
           retention-days: 7

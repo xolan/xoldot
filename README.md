@@ -6,6 +6,7 @@ files linked into your home directory. Its configuration lives in
 
 ## Table of contents
 
+- [Install](#install)
 - [Get started](#get-started)
 - [Output](#output)
 - [Apply](#apply)
@@ -20,7 +21,31 @@ files linked into your home directory. Its configuration lives in
 - [Sync](#sync)
 - [Shell completion](#shell-completion)
 - [Overrides and limits](#overrides-and-limits)
-- [Development](#development)
+
+## Install
+
+Download the archive for your operating system and architecture from
+[GitHub Releases](https://github.com/xolan/xoldot/releases). Releases provide
+Linux and macOS binaries for `amd64` and `arm64`, plus a `SHA256SUMS` file.
+
+After checking the archive digest against `SHA256SUMS`, extract and install the
+binary. Replace the example version and target with the archive you downloaded:
+
+```sh
+version=v0.1.0
+os=linux
+arch=amd64
+archive="xoldot-${version}-${os}-${arch}.tar.gz"
+tar -xzf "$archive"
+mkdir -p ~/.local/bin
+install -m 0755 "xoldot-${version}-${os}-${arch}" ~/.local/bin/xoldot
+```
+
+Make sure `~/.local/bin` is on `PATH`, then check the installed version:
+
+```sh
+xoldot version
+```
 
 ## Get started
 
@@ -581,17 +606,5 @@ Force deletion and shells other than Bash, Zsh, and Fish are not supported.
 Profiles cannot select themselves from a hostname, operating system,
 distribution, architecture, or environment value.
 
-## Development
-
-[mise](https://mise.jdx.dev/) manages the development tools and commands:
-
-```sh
-mise trust
-mise install
-mise run check
-mise run install
-```
-
-Use the mise tasks instead of invoking `go`, `gofmt`, or `golangci-lint`
-directly. Run `mise tasks` to list them. Set `XOLDOT_TARGET_HOME` to test apply
-against an isolated home directory.
+Contributor build, test, and release instructions are in
+[DEVELOPMENT.md](DEVELOPMENT.md).

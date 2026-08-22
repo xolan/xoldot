@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Install mise tools
+        uses: jdx/mise-action@v4
+      - name: Validate release tag
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "release tag must match vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+      - name: Run repository checks
+        run: mise run check
+
+  build:
+    name: Build / ${{ matrix.goos }}-${{ matrix.goarch }}
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+        goos: [linux, darwin]
+    env:
+      CGO_ENABLED: "0"
+      GOARCH: ${{ matrix.goarch }}
+      GOOS: ${{ matrix.goos }}
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Install mise tools
+        uses: jdx/mise-action@v4
+      - name: Build archive
+        run: mise run archive
+      - name: Upload archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/xoldot-${{ env.VERSION }}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - name: Download archives
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Create checksums
+        run: |
+          cd dist
+          LC_ALL=C sha256sum ./*.tar.gz > SHA256SUMS
+      - name: Publish GitHub Release
+        run: |
+          gh release create "$VERSION" dist/* \
+            --draft \
+            --generate-notes \
+            --title "$VERSION" \
+            --verify-tag
+          gh release edit "$VERSION" --draft=false

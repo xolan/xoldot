@@ -46,7 +46,11 @@ description = "Build a versioned release binary"
 run = '''
 mkdir -p dist
 version="${VERSION:-dev}"
-go build -trimpath -ldflags "-s -w -X main.version=$version" -o "dist/xoldot-${version}" ./cmd/xoldot
+target_os="${GOOS:-$(go env GOOS)}"
+target_arch="${GOARCH:-$(go env GOARCH)}"
+binary="xoldot-${version}-${target_os}-${target_arch}"
+CGO_ENABLED="${CGO_ENABLED:-0}" GOOS="$target_os" GOARCH="$target_arch" \
+  go build -trimpath -ldflags "-s -w -X main.version=$version" -o "dist/$binary" ./cmd/xoldot
 '''
 
 [tasks.archive]
@@ -54,7 +58,10 @@ description = "Archive a versioned release binary"
 depends = ["package"]
 run = '''
 version="${VERSION:-dev}"
-tar -czf "dist/xoldot-${version}.tar.gz" -C dist "xoldot-${version}"
+target_os="${GOOS:-$(go env GOOS)}"
+target_arch="${GOARCH:-$(go env GOARCH)}"
+binary="xoldot-${version}-${target_os}-${target_arch}"
+tar -czf "dist/${binary}.tar.gz" -C dist "$binary"
 '''
 
 [tasks.install]
