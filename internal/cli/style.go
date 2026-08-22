@@ -98,6 +98,29 @@ type terminalReporter struct {
 	errorStyle  styler
 }
 
+type statusDecoration struct {
+	prefix    string
+	color     string
+	colorLine bool
+}
+
+func decorationForStatus(kind status.Kind) (statusDecoration, error) {
+	switch kind {
+	case status.Progress:
+		return statusDecoration{prefix: "›", color: styleCyan}, nil
+	case status.Success:
+		return statusDecoration{prefix: "✓", color: styleGreen, colorLine: true}, nil
+	case status.Warning:
+		return statusDecoration{prefix: "!", color: styleYellow, colorLine: true}, nil
+	case status.Command:
+		return statusDecoration{prefix: "+", color: styleMuted, colorLine: true}, nil
+	case status.Error:
+		return statusDecoration{prefix: "✗", color: styleRed, colorLine: true}, nil
+	default:
+		return statusDecoration{}, fmt.Errorf("unknown status kind %d", kind)
+	}
+}
+
 func newTerminalReporter(output, errorOutput io.Writer, outputStyle styler) terminalReporter {
 	return terminalReporter{
 		output:      output,
@@ -108,41 +131,23 @@ func newTerminalReporter(output, errorOutput io.Writer, outputStyle styler) term
 }
 
 func (reporter terminalReporter) Report(kind status.Kind, text string) error {
+	decoration, err := decorationForStatus(kind)
+	if err != nil {
+		return err
+	}
 	output := reporter.output
 	style := reporter.outputStyle
-	prefix := ""
-	color := ""
-	colorLine := false
 
 	switch kind {
-	case status.Progress:
-		prefix = "›"
-		color = styleCyan
-	case status.Success:
-		prefix = "✓"
-		color = styleGreen
-		colorLine = true
-	case status.Warning:
-		prefix = "!"
-		color = styleYellow
-		colorLine = true
 	case status.Command:
 		output = reporter.errorOutput
 		style = reporter.errorStyle
-		prefix = "+"
-		color = styleMuted
-		colorLine = true
 	case status.Error:
 		output = reporter.errorOutput
 		style = reporter.errorStyle
-		prefix = "✗"
-		color = styleRed
-		colorLine = true
-	default:
-		return fmt.Errorf("unknown status kind %d", kind)
 	}
 
-	message := formatStatus(style, color, prefix, text, colorLine)
+	message := formatStatus(style, decoration.color, decoration.prefix, text, decoration.colorLine)
 	if _, err := io.WriteString(output, message); err != nil {
 		return fmt.Errorf("write status output: %w", err)
 	}

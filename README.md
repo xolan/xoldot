@@ -84,10 +84,11 @@ xoldot uses stable prefixes for its own messages:
 - `+` for underlying Git and `npx` commands shown by `--verbose`
 
 When the destination is a terminal, xoldot colors those prefixes and messages.
+Doctor applies the matching error, warning, or progress prefix to every finding.
 Status and Doctor also color state and severity words such as `current`,
 `conflict`, `error:`, and `warning:`. Diff colors plan keywords and unified-diff
-lines. `NO_COLOR` or `TERM=dumb` disables ANSI styling without removing the
-text prefixes.
+lines. `NO_COLOR` or `TERM=dumb` disables ANSI styling without removing the text
+prefixes.
 
 Output from Git, `npx`, lifecycle scripts, and Tool installers passes through
 unchanged. Commands that return data, including `version`, `tool list`, `skill
@@ -299,6 +300,7 @@ Doctor prints errors first, then warnings, then information. Each error or
 warning includes a remedy. Errors return a failing exit status. Managed home
 and Alias conflicts are warnings because they are reportable Machine drift;
 warnings and information do not make Doctor fail.
+Remedy lines remain indented without a prefix.
 
 Doctor is read-only. It may run `node --version` and local read-only Git
 commands. It never runs user-authored Tool checks, invokes `npx`, fetches a Git

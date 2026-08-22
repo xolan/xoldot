@@ -4,6 +4,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/xolan/xoldot/internal/doctor"
+	"github.com/xolan/xoldot/internal/status"
 )
 
 func (a *app) doctorCommand() *cobra.Command {
@@ -24,16 +25,20 @@ func (a *app) doctor() error {
 	}
 	report := doctor.Check(paths)
 	for _, finding := range report.Findings() {
-		label := finding.Severity.String() + ":"
+		kind := status.Progress
 		switch finding.Severity {
 		case doctor.Error:
-			label = a.style.failure(label)
+			kind = status.Error
 		case doctor.Warning:
-			label = a.style.warning(label)
-		case doctor.Information:
-			label = a.style.progress(label)
+			kind = status.Warning
 		}
-		if err := writef(a.output, "%s %s\n", label, finding.Message); err != nil {
+		decoration, err := decorationForStatus(kind)
+		if err != nil {
+			return err
+		}
+		label := a.style.paint(decoration.color, finding.Severity.String()+":")
+		line := formatStatus(a.style, decoration.color, decoration.prefix, label+" "+finding.Message, false)
+		if err := write(a.output, line); err != nil {
 			return err
 		}
 		if finding.Remedy != "" {

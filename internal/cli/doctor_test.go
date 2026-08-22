@@ -38,9 +38,9 @@ func TestDoctorPrintsStableSeveritiesRemediesAndFailsOnErrors(t *testing.T) {
 		t.Fatalf("doctor error = %v", err)
 	}
 	text := output.String()
-	errorAt := strings.Index(text, "error:")
-	warningAt := strings.Index(text, "warning:")
-	informationAt := strings.Index(text, "information:")
+	errorAt := strings.Index(text, "✗ error:")
+	warningAt := strings.Index(text, "! warning:")
+	informationAt := strings.Index(text, "› information:")
 	if errorAt < 0 || warningAt <= errorAt || informationAt <= warningAt {
 		t.Fatalf("output severity order is unstable:\n%s", text)
 	}
@@ -72,7 +72,7 @@ func TestDoctorWarningsDoNotFail(t *testing.T) {
 	if err := Run([]string{"--config-dir", root, "doctor"}, bytes.NewReader(nil), &output, &output, "test"); err != nil {
 		t.Fatalf("doctor error = %v\n%s", err, output.String())
 	}
-	if !strings.Contains(output.String(), "warning: Managed home conflict") {
+	if !strings.Contains(output.String(), "! warning: Managed home conflict") {
 		t.Errorf("output = %q", output.String())
 	}
 }
@@ -99,9 +99,9 @@ func TestDoctorStylesSeverityAndRemedyPrefixesForTerminals(t *testing.T) {
 		t.Fatal("doctor error = nil, want invalid Tool catalog error")
 	}
 	for _, want := range []string{
-		"\x1b[31merror:\x1b[0m",
+		"\x1b[31m✗\x1b[0m \x1b[31merror:\x1b[0m",
 		"\x1b[1mremedy:\x1b[0m",
-		"\x1b[36minformation:\x1b[0m",
+		"\x1b[36m›\x1b[0m \x1b[36minformation:\x1b[0m",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("styled doctor output does not contain %q:\n%s", want, output.String())
