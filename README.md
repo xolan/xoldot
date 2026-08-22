@@ -83,11 +83,12 @@ xoldot uses stable prefixes for its own messages:
 - `✗` for command errors on standard error
 - `+` for underlying Git and `npx` commands shown by `--verbose`
 
-When the destination is a terminal, xoldot colors those prefixes and messages.
-Doctor applies the matching error, warning, or progress prefix to every finding.
-Status and Doctor also color state and severity words such as `current`,
-`conflict`, `error:`, and `warning:`. Diff colors plan keywords and unified-diff
-lines. `NO_COLOR` or `TERM=dumb` disables ANSI styling without removing the text
+When the destination is a terminal, xoldot colors those prefixes. Completed
+work, warnings, command errors, and verbose commands also color the message.
+Doctor colors the matching error, warning, or progress symbol for every finding
+without repeating the severity as a label. Status also colors state words such
+as `current` and `conflict`. Diff colors plan keywords and unified-diff lines.
+`NO_COLOR` or `TERM=dumb` disables ANSI styling without removing the text
 prefixes.
 
 Output from Git, `npx`, lifecycle scripts, and Tool installers passes through

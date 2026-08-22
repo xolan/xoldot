@@ -36,8 +36,7 @@ func (a *app) doctor() error {
 		if err != nil {
 			return err
 		}
-		label := a.style.paint(decoration.color, finding.Severity.String()+":")
-		line := formatStatus(a.style, decoration.color, decoration.prefix, label+" "+finding.Message, false)
+		line := formatStatus(a.style, decoration.color, decoration.prefix, finding.Message, false)
 		if err := write(a.output, line); err != nil {
 			return err
 		}
