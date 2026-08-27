@@ -111,6 +111,9 @@ func (a *app) applyCommand() *cobra.Command {
 	command.Flags().BoolVar(&dry, "dry", false, "show what would change without changing it")
 	command.Flags().BoolVar(&backup, "backup", false, "back up eligible managed-home conflicts before linking")
 	command.Flags().StringVar(&profile, "profile", "", "select one profile before applying")
+	if err := command.RegisterFlagCompletionFunc("profile", a.completeProfileNames); err != nil {
+		panic(fmt.Sprintf("register --profile completion: %v", err))
+	}
 	command.Flags().StringArrayVar(
 		&only,
 		"only",

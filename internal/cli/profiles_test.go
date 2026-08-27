@@ -12,6 +12,70 @@ import (
 	"github.com/xolan/xoldot/internal/config"
 )
 
+func TestProfileListShowAndCompletionAreReadOnly(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	paths := config.NewPaths(root)
+	if err := config.Initialize(paths); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, paths.Tools, []byte(`[[tool]]
+name = "git"
+check = "command -v git"
+`))
+	writeTestFile(t, paths.Aliases, []byte(`[[alias]]
+name = "ll"
+command = "ls -la"
+`))
+	writeTestFile(t, filepath.Join(paths.ManagedHome, ".config", "base"), []byte("base"))
+	writeTestFile(t, filepath.Join(paths.Profiles, "Base.toml"), []byte(`aliases = ["ll"]
+managed_home = [".config/base"]
+`))
+	writeTestFile(t, filepath.Join(paths.Profiles, "Work.toml"), []byte(`extends = ["BASE"]
+tools = ["git"]
+`))
+	t.Setenv(config.TargetHomeEnv, home)
+
+	if got, want := runCLI(t, root, "profile", "list"), "base\nwork extends base\n"; got != want {
+		t.Errorf("profile list = %q, want %q", got, want)
+	}
+	show := runCLI(t, root, "profile", "show", "WoRK")
+	for _, want := range []string{"Profile: work", "Tools:\n  git", "Aliases:\n  ll", "Skills:\n", "Managed home:\n  .config/base"} {
+		if !strings.Contains(show, want) {
+			t.Errorf("profile show = %q, want %q", show, want)
+		}
+	}
+	if _, err := os.Stat(home); err != nil {
+		t.Fatalf("target home changed: %v", err)
+	}
+
+	application := &app{configDir: root}
+	names, _ := application.completeProfileNames(nil, nil, "")
+	if got, want := strings.Join(names, ","), "base,work"; got != want {
+		t.Errorf("profile completion = %q, want %q", got, want)
+	}
+	application.configDir = t.TempDir()
+	names, _ = application.completeProfileNames(nil, nil, "")
+	if len(names) != 0 {
+		t.Errorf("completion for invalid configuration = %v, want no suggestions", names)
+	}
+
+	for _, arguments := range [][]string{
+		{"--config-dir", root, "__complete", "apply", "--profile", ""},
+		{"--config-dir", root, "__complete", "status", "--profile", ""},
+		{"--config-dir", root, "__complete", "diff", "--profile", ""},
+		{"--config-dir", root, "__complete", "profile", "show", ""},
+	} {
+		var output bytes.Buffer
+		if err := Run(arguments, bytes.NewReader(nil), &output, &output, "test"); err != nil {
+			t.Fatalf("completion %v error = %v", arguments, err)
+		}
+		if got := output.String(); !strings.Contains(got, "base") || !strings.Contains(got, "work") {
+			t.Errorf("completion %v = %q, want normalized profile names", arguments, got)
+		}
+	}
+}
+
 func TestProfileFiltersApplyStatusAndDiffAndSwitchesSafely(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()

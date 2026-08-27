@@ -43,6 +43,9 @@ func (a *app) statusCommand() *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&profile, "profile", "", "inspect one selected profile")
+	if err := command.RegisterFlagCompletionFunc("profile", a.completeProfileNames); err != nil {
+		panic(fmt.Sprintf("register --profile completion: %v", err))
+	}
 	return command
 }
 
@@ -57,6 +60,9 @@ func (a *app) diffCommand() *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&profile, "profile", "", "show changes for one selected profile")
+	if err := command.RegisterFlagCompletionFunc("profile", a.completeProfileNames); err != nil {
+		panic(fmt.Sprintf("register --profile completion: %v", err))
+	}
 	return command
 }
 

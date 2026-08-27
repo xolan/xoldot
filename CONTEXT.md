@@ -23,7 +23,9 @@ _Avoid_: Configuration directory when Git is disabled
 
 **Profile**:
 A named subset of a Configuration for one Machine. A Profile may inherit from
-other Profiles, and it selects declarations without redefining them.
+other Profiles, and it selects declarations without redefining them. Profile
+list and show are read-only views of Profile declarations and their resolved
+union.
 _Avoid_: Environment, Machine configuration
 
 **Machine**:

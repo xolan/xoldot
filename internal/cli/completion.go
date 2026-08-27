@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/xolan/xoldot/internal/profiles"
 )
 
 type completionGenerator struct {
@@ -54,6 +56,22 @@ func findCompletionGenerator(shell string) (completionGenerator, bool) {
 		}
 	}
 	return completionGenerator{}, false
+}
+
+func (a *app) completeProfileNames(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+	paths, err := a.paths()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	summaries, err := profiles.List(paths)
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	names := make([]string, len(summaries))
+	for index, summary := range summaries {
+		names[index] = summary.Name
+	}
+	return names, cobra.ShellCompDirectiveNoFileComp
 }
 
 func (a *app) completionCommand(root *cobra.Command) *cobra.Command {

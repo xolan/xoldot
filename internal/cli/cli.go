@@ -216,6 +216,7 @@ func (a *app) rootCommand(version string) *cobra.Command {
 	root.AddCommand(a.restoreCommand())
 	root.AddCommand(a.selfUpdateCommand(version))
 	root.AddCommand(a.statusCommand(), a.diffCommand(), a.doctorCommand())
+	root.AddCommand(a.profileCommand())
 
 	var syncDry bool
 	syncCommand := &cobra.Command{
