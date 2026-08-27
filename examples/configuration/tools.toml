@@ -1,0 +1,9 @@
+[[tool]]
+name = "shell-builtins"
+check = "command -v printf"
+
+[tool.install]
+macos = "printf 'printf is supplied by the shell'"
+
+[tool.install.linux]
+default = "printf 'printf is supplied by the shell'"

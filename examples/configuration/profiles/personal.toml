@@ -1,0 +1,3 @@
+extends = ["base"]
+aliases = ["weekend"]
+managed_home = [".config/leisure"]

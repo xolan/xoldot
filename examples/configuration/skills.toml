@@ -1,0 +1,7 @@
+# This fictional source and digest demonstrate the saved catalog format.
+# Replace the entry with `xoldot skill add` before installing or updating it.
+[[skill]]
+name = "focus"
+source = "https://example.invalid/focus-skill"
+digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+agents = ["focus-reviewer.md"]
