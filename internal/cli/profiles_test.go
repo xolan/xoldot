@@ -40,7 +40,13 @@ tools = ["git"]
 		t.Errorf("profile list = %q, want %q", got, want)
 	}
 	show := runCLI(t, root, "profile", "show", "WoRK")
-	for _, want := range []string{"Profile: work", "Tools:\n  git", "Aliases:\n  ll", "Skills:\n", "Managed home:\n  .config/base"} {
+	for _, want := range []string{
+		"Profile: work",
+		"Tools:\n  direct: git",
+		"Aliases:\n  inherited: ll",
+		"Skills:\n",
+		"Managed home:\n  inherited: .config/base",
+	} {
 		if !strings.Contains(show, want) {
 			t.Errorf("profile show = %q, want %q", show, want)
 		}

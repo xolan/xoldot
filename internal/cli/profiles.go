@@ -71,7 +71,7 @@ func (a *app) profileShow(name string) error {
 	}
 	for _, section := range []struct {
 		name    string
-		members []string
+		members profiles.Membership
 	}{
 		{"Tools", description.Tools},
 		{"Aliases", description.Aliases},
@@ -81,8 +81,13 @@ func (a *app) profileShow(name string) error {
 		if err := writef(a.output, "%s:\n", section.name); err != nil {
 			return err
 		}
-		for _, member := range section.members {
-			if err := writef(a.output, "  %s\n", member); err != nil {
+		for _, member := range section.members.Direct {
+			if err := writef(a.output, "  direct: %s\n", member); err != nil {
+				return err
+			}
+		}
+		for _, member := range section.members.Inherited {
+			if err := writef(a.output, "  inherited: %s\n", member); err != nil {
 				return err
 			}
 		}
