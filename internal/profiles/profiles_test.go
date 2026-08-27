@@ -90,6 +90,7 @@ managed_home = [".config/base"]`)
 	writeProfile(t, paths, "shared", `skills = ["unslop"]`)
 	writeProfile(t, paths, "Work", `extends = ["shared", "BASE"]
 tools = ["ripgrep"]
+skills = ["thermos"]
 managed_home = [".config/work/config.toml"]`)
 
 	list, err := List(paths)
@@ -109,11 +110,22 @@ managed_home = [".config/work/config.toml"]`)
 		t.Fatalf("Describe() error = %v", err)
 	}
 	if got, want := description, (Description{
-		Name:        "work",
-		Tools:       []string{"git", "ripgrep"},
-		Aliases:     []string{"ll"},
-		Skills:      []string{"unslop"},
-		ManagedHome: []string{".agents/agents/reviewer.md", ".agents/skills/unslop", ".claude/agents/reviewer.md", ".claude/skills/unslop", ".config/base", ".config/work/config.toml"},
+		Name: "work",
+		Tools: Membership{
+			Direct:    []string{"ripgrep"},
+			Inherited: []string{"git"},
+		},
+		Aliases: Membership{
+			Inherited: []string{"ll"},
+		},
+		Skills: Membership{
+			Direct:    []string{"thermos"},
+			Inherited: []string{"unslop"},
+		},
+		ManagedHome: Membership{
+			Direct:    []string{".agents/agents/nested/quality.md", ".agents/skills/thermos", ".claude/agents/nested/quality.md", ".claude/skills/thermos", ".config/work/config.toml"},
+			Inherited: []string{".agents/agents/reviewer.md", ".agents/skills/unslop", ".claude/agents/reviewer.md", ".claude/skills/unslop", ".config/base"},
+		},
 	}); !reflect.DeepEqual(got, want) {
 		t.Errorf("Describe() = %#v, want %#v", got, want)
 	}

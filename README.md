@@ -265,10 +265,13 @@ templates.
 
 `profile list` prints normalized names in lexical order and each Profile's
 direct parents in lexical order. `profile show <name>` normalizes its argument
-like `--profile` and prints the resolved union in Tool, Alias, and Skill catalog
-order and managed-home path order. Both commands validate every Profile and the
-catalogs they reference, but do not inspect the Target home, run lifecycle
-scripts, or run Tool checks or installers.
+like `--profile` and labels each selected member as `direct` when the selected
+leaf declares it or `inherited` when it comes only from a parent. Tool, Alias,
+and Skill members follow catalog order. Managed-home members use path order.
+Managed-home paths selected implicitly by a Skill have the same provenance as
+that Skill. Both commands validate every Profile and the catalogs they
+reference, but do not inspect the Target home, run lifecycle scripts, or run
+Tool checks or installers.
 
 Tool, Alias, and Skill entries must match names already declared in their
 catalogs. A managed-home entry must already exist, must stay within

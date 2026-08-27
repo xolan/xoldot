@@ -42,11 +42,16 @@ type managedPath struct {
 	recursive bool
 }
 
+type member struct {
+	direct    bool
+	recursive bool
+}
+
 type members struct {
-	tools       map[string]struct{}
-	aliases     map[string]struct{}
-	skills      map[string]struct{}
-	managedHome map[string]bool
+	tools       map[string]member
+	aliases     map[string]member
+	skills      map[string]member
+	managedHome map[string]member
 }
 
 type Configuration struct {
@@ -63,13 +68,20 @@ type Summary struct {
 	Extends []string
 }
 
+// Membership separates members declared by the selected Profile from members
+// inherited through its parents.
+type Membership struct {
+	Direct    []string
+	Inherited []string
+}
+
 // Description contains the complete resolved membership of a Profile.
 type Description struct {
 	Name        string
-	Tools       []string
-	Aliases     []string
-	Skills      []string
-	ManagedHome []string
+	Tools       Membership
+	Aliases     Membership
+	Skills      Membership
+	ManagedHome Membership
 }
 
 type ManagedHomeSelection struct {
@@ -199,10 +211,10 @@ func Describe(paths config.Paths, selectedName string) (Description, error) {
 	}
 	return Description{
 		Name:        selectedName,
-		Tools:       catalogToolNames(filterTools(profiles.tools, selected.tools)),
-		Aliases:     catalogAliasNames(filterAliases(profiles.aliases, selected.aliases)),
-		Skills:      catalogSkillNames(filterSkills(profiles.skills, selected.skills)),
-		ManagedHome: sortedManagedPaths(selected.managedHome),
+		Tools:       partitionMembership(catalogToolNames(profiles.tools), selected.tools),
+		Aliases:     partitionMembership(catalogAliasNames(profiles.aliases), selected.aliases),
+		Skills:      partitionMembership(catalogSkillNames(profiles.skills), selected.skills),
+		ManagedHome: partitionMembership(sortedManagedPaths(selected.managedHome), selected.managedHome),
 	}, nil
 }
 
@@ -213,7 +225,8 @@ func (profiles profileSet) selectedMembers(managedHome, selectedName string) (me
 	}
 	selected = cloneMembers(selected)
 	for _, skill := range profiles.skills.Skills {
-		if _, exists := selected.skills[skill.Name]; !exists {
+		skillMember, exists := selected.skills[skill.Name]
+		if !exists {
 			continue
 		}
 		managedPaths, err := agentskills.ManagedHomePaths(managedHome, skill)
@@ -221,7 +234,7 @@ func (profiles profileSet) selectedMembers(managedHome, selectedName string) (me
 			return members{}, err
 		}
 		for _, path := range managedPaths {
-			addManagedPath(selected.managedHome, path.Relative, path.Recursive)
+			addManagedPath(selected.managedHome, path.Relative, path.Recursive, skillMember.direct)
 		}
 	}
 	return selected, nil
@@ -229,7 +242,7 @@ func (profiles profileSet) selectedMembers(managedHome, selectedName string) (me
 
 func cloneMembers(source members) members {
 	result := newMembers()
-	mergeMembers(&result, source)
+	mergeMembers(&result, source, false)
 	return result
 }
 
@@ -257,12 +270,28 @@ func catalogSkillNames(catalog agentskills.Catalog) []string {
 	return names
 }
 
-func sortedManagedPaths(paths map[string]bool) []string {
+func sortedManagedPaths(paths map[string]member) []string {
 	result := make([]string, 0, len(paths))
 	for path := range paths {
 		result = append(result, filepath.ToSlash(path))
 	}
 	sort.Strings(result)
+	return result
+}
+
+func partitionMembership(names []string, selected map[string]member) Membership {
+	var result Membership
+	for _, name := range names {
+		selectedMember, exists := selected[name]
+		if !exists {
+			continue
+		}
+		if selectedMember.direct {
+			result.Direct = append(result.Direct, name)
+		} else {
+			result.Inherited = append(result.Inherited, name)
+		}
+	}
 	return result
 }
 
@@ -457,7 +486,7 @@ func resolveAll(documents map[string]document) (map[string]members, error) {
 			if err != nil {
 				return members{}, err
 			}
-			mergeMembers(&result, inherited)
+			mergeMembers(&result, inherited, true)
 		}
 		addDocumentMembers(&result, documents[name])
 		stack = stack[:len(stack)-1]
@@ -476,41 +505,48 @@ func resolveAll(documents map[string]document) (map[string]members, error) {
 
 func newMembers() members {
 	return members{
-		tools:       make(map[string]struct{}),
-		aliases:     make(map[string]struct{}),
-		skills:      make(map[string]struct{}),
-		managedHome: make(map[string]bool),
+		tools:       make(map[string]member),
+		aliases:     make(map[string]member),
+		skills:      make(map[string]member),
+		managedHome: make(map[string]member),
 	}
 }
 
-func mergeMembers(target *members, source members) {
-	for name := range source.tools {
-		target.tools[name] = struct{}{}
+func mergeMembers(target *members, source members, inherited bool) {
+	for name, sourceMember := range source.tools {
+		addMember(target.tools, name, false, sourceMember.direct && !inherited)
 	}
-	for name := range source.aliases {
-		target.aliases[name] = struct{}{}
+	for name, sourceMember := range source.aliases {
+		addMember(target.aliases, name, false, sourceMember.direct && !inherited)
 	}
-	for name := range source.skills {
-		target.skills[name] = struct{}{}
+	for name, sourceMember := range source.skills {
+		addMember(target.skills, name, false, sourceMember.direct && !inherited)
 	}
-	for path, recursive := range source.managedHome {
-		target.managedHome[path] = recursive
+	for path, sourceMember := range source.managedHome {
+		addMember(target.managedHome, path, sourceMember.recursive, sourceMember.direct && !inherited)
 	}
 }
 
 func addDocumentMembers(target *members, source document) {
 	for _, name := range source.tools {
-		target.tools[name] = struct{}{}
+		addMember(target.tools, name, false, true)
 	}
 	for _, name := range source.aliases {
-		target.aliases[name] = struct{}{}
+		addMember(target.aliases, name, false, true)
 	}
 	for _, name := range source.skills {
-		target.skills[name] = struct{}{}
+		addMember(target.skills, name, false, true)
 	}
 	for _, selected := range source.managedHome {
-		target.managedHome[selected.path] = selected.recursive
+		addMember(target.managedHome, selected.path, selected.recursive, true)
 	}
+}
+
+func addMember(members map[string]member, name string, recursive, direct bool) {
+	existing := members[name]
+	existing.direct = existing.direct || direct
+	existing.recursive = existing.recursive || recursive
+	members[name] = existing
 }
 
 func normalizeName(name string) (string, error) {
@@ -542,20 +578,20 @@ func sortedDocumentNames(documents map[string]document) []string {
 	return names
 }
 
-func addManagedPath(paths map[string]bool, path string, recursive bool) {
+func addManagedPath(paths map[string]member, path string, recursive, direct bool) {
 	path = filepath.Clean(path)
-	paths[path] = recursive
+	addMember(paths, path, recursive, direct)
 }
 
-func newManagedHomeSelection(paths map[string]bool) ManagedHomeSelection {
+func newManagedHomeSelection(paths map[string]member) ManagedHomeSelection {
 	selection := ManagedHomeSelection{paths: make([]managedPath, 0, len(paths))}
-	for path, recursive := range paths {
-		selection.paths = append(selection.paths, managedPath{path: path, recursive: recursive})
+	for path, member := range paths {
+		selection.paths = append(selection.paths, managedPath{path: path, recursive: member.recursive})
 	}
 	return selection
 }
 
-func filterTools(catalog toolcatalog.Catalog, selected map[string]struct{}) toolcatalog.Catalog {
+func filterTools(catalog toolcatalog.Catalog, selected map[string]member) toolcatalog.Catalog {
 	filtered := toolcatalog.Catalog{Tools: make([]toolcatalog.Tool, 0, len(selected))}
 	for _, tool := range catalog.Tools {
 		if _, exists := selected[tool.Name]; exists {
@@ -565,7 +601,7 @@ func filterTools(catalog toolcatalog.Catalog, selected map[string]struct{}) tool
 	return filtered
 }
 
-func filterAliases(file aliases.File, selected map[string]struct{}) aliases.File {
+func filterAliases(file aliases.File, selected map[string]member) aliases.File {
 	filtered := aliases.File{Aliases: make([]aliases.Alias, 0, len(selected))}
 	for _, alias := range file.Aliases {
 		if _, exists := selected[alias.Name]; exists {
@@ -575,7 +611,7 @@ func filterAliases(file aliases.File, selected map[string]struct{}) aliases.File
 	return filtered
 }
 
-func filterSkills(catalog agentskills.Catalog, selected map[string]struct{}) agentskills.Catalog {
+func filterSkills(catalog agentskills.Catalog, selected map[string]member) agentskills.Catalog {
 	filtered := agentskills.Catalog{Skills: make([]agentskills.Skill, 0, len(selected))}
 	for _, skill := range catalog.Skills {
 		if _, exists := selected[skill.Name]; exists {
