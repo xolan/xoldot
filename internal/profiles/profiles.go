@@ -57,15 +57,31 @@ type Configuration struct {
 	ManagedHome ManagedHomeSelection
 }
 
+// Summary describes a Profile declaration without resolving its members.
+type Summary struct {
+	Name    string
+	Extends []string
+}
+
+// Description contains the complete resolved membership of a Profile.
+type Description struct {
+	Name        string
+	Tools       []string
+	Aliases     []string
+	Skills      []string
+	ManagedHome []string
+}
+
 type ManagedHomeSelection struct {
 	paths []managedPath
 }
 
 type profileSet struct {
-	resolved map[string]members
-	tools    toolcatalog.Catalog
-	aliases  aliases.File
-	skills   agentskills.Catalog
+	documents map[string]document
+	resolved  map[string]members
+	tools     toolcatalog.Catalog
+	aliases   aliases.File
+	skills    agentskills.Catalog
 }
 
 type CatalogError struct {
@@ -122,10 +138,11 @@ func loadProfileSet(paths config.Paths) (profileSet, error) {
 		return profileSet{}, err
 	}
 	return profileSet{
-		resolved: resolved,
-		tools:    tools,
-		aliases:  aliasFile,
-		skills:   skills,
+		documents: documents,
+		resolved:  resolved,
+		tools:     tools,
+		aliases:   aliasFile,
+		skills:    skills,
 	}, nil
 }
 
@@ -138,24 +155,10 @@ func Load(paths config.Paths, selectedName string) (Configuration, error) {
 	if err != nil {
 		return Configuration{}, err
 	}
-	if _, exists := profiles.resolved[selectedName]; !exists {
-		return Configuration{}, fmt.Errorf("profile %q does not exist", selectedName)
+	selected, err := profiles.selectedMembers(paths.ManagedHome, selectedName)
+	if err != nil {
+		return Configuration{}, err
 	}
-	selected := profiles.resolved[selectedName]
-
-	for _, skill := range profiles.skills.Skills {
-		if _, exists := selected.skills[skill.Name]; !exists {
-			continue
-		}
-		managedPaths, err := agentskills.ManagedHomePaths(paths.ManagedHome, skill)
-		if err != nil {
-			return Configuration{}, err
-		}
-		for _, path := range managedPaths {
-			addManagedPath(selected.managedHome, path.Relative, path.Recursive)
-		}
-	}
-
 	return Configuration{
 		Name:        selectedName,
 		Tools:       filterTools(profiles.tools, selected.tools),
@@ -163,6 +166,104 @@ func Load(paths config.Paths, selectedName string) (Configuration, error) {
 		Skills:      filterSkills(profiles.skills, selected.skills),
 		ManagedHome: newManagedHomeSelection(selected.managedHome),
 	}, nil
+}
+
+// List returns normalized Profile names and their direct parents in lexical order.
+func List(paths config.Paths) ([]Summary, error) {
+	profiles, err := loadProfileSet(paths)
+	if err != nil {
+		return nil, err
+	}
+	summaries := make([]Summary, 0, len(profiles.documents))
+	for _, name := range sortedDocumentNames(profiles.documents) {
+		extends := append([]string(nil), profiles.documents[name].extends...)
+		sort.Strings(extends)
+		summaries = append(summaries, Summary{Name: name, Extends: extends})
+	}
+	return summaries, nil
+}
+
+// Describe returns the complete transitive union selected by name.
+func Describe(paths config.Paths, selectedName string) (Description, error) {
+	profiles, err := loadProfileSet(paths)
+	if err != nil {
+		return Description{}, err
+	}
+	selectedName, err = normalizeName(selectedName)
+	if err != nil {
+		return Description{}, err
+	}
+	selected, err := profiles.selectedMembers(paths.ManagedHome, selectedName)
+	if err != nil {
+		return Description{}, err
+	}
+	return Description{
+		Name:        selectedName,
+		Tools:       catalogToolNames(filterTools(profiles.tools, selected.tools)),
+		Aliases:     catalogAliasNames(filterAliases(profiles.aliases, selected.aliases)),
+		Skills:      catalogSkillNames(filterSkills(profiles.skills, selected.skills)),
+		ManagedHome: sortedManagedPaths(selected.managedHome),
+	}, nil
+}
+
+func (profiles profileSet) selectedMembers(managedHome, selectedName string) (members, error) {
+	selected, exists := profiles.resolved[selectedName]
+	if !exists {
+		return members{}, fmt.Errorf("profile %q does not exist", selectedName)
+	}
+	selected = cloneMembers(selected)
+	for _, skill := range profiles.skills.Skills {
+		if _, exists := selected.skills[skill.Name]; !exists {
+			continue
+		}
+		managedPaths, err := agentskills.ManagedHomePaths(managedHome, skill)
+		if err != nil {
+			return members{}, err
+		}
+		for _, path := range managedPaths {
+			addManagedPath(selected.managedHome, path.Relative, path.Recursive)
+		}
+	}
+	return selected, nil
+}
+
+func cloneMembers(source members) members {
+	result := newMembers()
+	mergeMembers(&result, source)
+	return result
+}
+
+func catalogToolNames(catalog toolcatalog.Catalog) []string {
+	names := make([]string, len(catalog.Tools))
+	for index, tool := range catalog.Tools {
+		names[index] = tool.Name
+	}
+	return names
+}
+
+func catalogAliasNames(file aliases.File) []string {
+	names := make([]string, len(file.Aliases))
+	for index, alias := range file.Aliases {
+		names[index] = alias.Name
+	}
+	return names
+}
+
+func catalogSkillNames(catalog agentskills.Catalog) []string {
+	names := make([]string, len(catalog.Skills))
+	for index, skill := range catalog.Skills {
+		names[index] = skill.Name
+	}
+	return names
+}
+
+func sortedManagedPaths(paths map[string]bool) []string {
+	result := make([]string, 0, len(paths))
+	for path := range paths {
+		result = append(result, filepath.ToSlash(path))
+	}
+	sort.Strings(result)
+	return result
 }
 
 func loadDocuments(directory string) (map[string]document, error) {

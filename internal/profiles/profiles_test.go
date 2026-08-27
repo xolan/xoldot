@@ -82,6 +82,43 @@ managed_home = [".config/work/config.toml"]
 	}
 }
 
+func TestListAndDescribeUseValidatedResolvedProfiles(t *testing.T) {
+	paths := profileFixture(t)
+	writeProfile(t, paths, "Base", `tools = ["git"]
+aliases = ["ll"]
+managed_home = [".config/base"]`)
+	writeProfile(t, paths, "shared", `skills = ["unslop"]`)
+	writeProfile(t, paths, "Work", `extends = ["shared", "BASE"]
+tools = ["ripgrep"]
+managed_home = [".config/work/config.toml"]`)
+
+	list, err := List(paths)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if got, want := list, []Summary{
+		{Name: "base"},
+		{Name: "shared"},
+		{Name: "work", Extends: []string{"base", "shared"}},
+	}; !reflect.DeepEqual(got, want) {
+		t.Errorf("List() = %#v, want %#v", got, want)
+	}
+
+	description, err := Describe(paths, "WoRK")
+	if err != nil {
+		t.Fatalf("Describe() error = %v", err)
+	}
+	if got, want := description, (Description{
+		Name:        "work",
+		Tools:       []string{"git", "ripgrep"},
+		Aliases:     []string{"ll"},
+		Skills:      []string{"unslop"},
+		ManagedHome: []string{".agents/agents/reviewer.md", ".agents/skills/unslop", ".claude/agents/reviewer.md", ".claude/skills/unslop", ".config/base", ".config/work/config.toml"},
+	}); !reflect.DeepEqual(got, want) {
+		t.Errorf("Describe() = %#v, want %#v", got, want)
+	}
+}
+
 func TestLoadRejectsInvalidProfiles(t *testing.T) {
 	tests := []struct {
 		name      string

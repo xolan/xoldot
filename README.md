@@ -228,9 +228,12 @@ timeouts, templates, or automatic rollback.
 ## Profiles
 
 A Profile selects an explicit subset of one Configuration. Put each Profile in
-`profiles/<name>.toml`, then pass its name to Apply, Status, or Diff:
+`profiles/<name>.toml`. List the available Profiles and inspect the complete
+resolved selection before using one:
 
 ```sh
+xoldot profile list
+xoldot profile show work
 xoldot apply --profile work
 xoldot apply --profile work --only tools --only managed-home
 xoldot apply --profile work --dry
@@ -259,6 +262,13 @@ managed_home = [".gitconfig", ".config/git"]
 result is the union of the leaf and every reachable parent. Parent order does
 not affect the result. Profiles have no exclusions, overrides, variables, or
 templates.
+
+`profile list` prints normalized names in lexical order and each Profile's
+direct parents in lexical order. `profile show <name>` normalizes its argument
+like `--profile` and prints the resolved union in Tool, Alias, and Skill catalog
+order and managed-home path order. Both commands validate every Profile and the
+catalogs they reference, but do not inspect the Target home, run lifecycle
+scripts, or run Tool checks or installers.
 
 Tool, Alias, and Skill entries must match names already declared in their
 catalogs. A managed-home entry must already exist, must stay within
@@ -623,7 +633,10 @@ xoldot completion fish > ~/.config/fish/completions/xoldot.fish
 ```
 
 Generation does not create or change files. Redirect the output when you want
-to install it.
+to install it. The generated completion suggests normalized Profile names for
+`apply --profile`, `status --profile`, `diff --profile`, and `profile show`.
+It reads the Configuration selected by `--config-dir`; invalid or unreadable
+Profile data produces no Profile suggestions.
 
 ## Overrides and limits
 
