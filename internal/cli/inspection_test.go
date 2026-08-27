@@ -123,13 +123,18 @@ func TestStatusAndDiffDoNotExecuteToolChecks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, command := range []string{"status", "diff"} {
+	for _, arguments := range [][]string{
+		{"status"},
+		{"diff"},
+		{"status", "--format", "json"},
+		{"diff", "--format", "json"},
+	} {
 		var output bytes.Buffer
-		if err := Run([]string{"--config-dir", root, command}, bytes.NewReader(nil), &output, &output, "test"); err != nil {
-			t.Fatalf("%s error = %v", command, err)
+		if err := Run(append([]string{"--config-dir", root}, arguments...), bytes.NewReader(nil), &output, &output, "test"); err != nil {
+			t.Fatalf("%v error = %v", arguments, err)
 		}
 		if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("%s executed the tool check: %v", command, err)
+			t.Fatalf("%v executed the tool check: %v", arguments, err)
 		}
 	}
 }
@@ -141,17 +146,27 @@ func TestStatusAndDiffDoNotChangeFilesystem(t *testing.T) {
 	if err := config.Initialize(config.NewPaths(root)); err != nil {
 		t.Fatal(err)
 	}
+	script := filepath.Join(root, "scripts", "before-apply", "run_mutating")
+	contents := fmt.Sprintf("#!/bin/sh\ntouch %s\n", shellQuote(filepath.Join(base, "script-ran")))
+	if err := os.WriteFile(script, []byte(contents), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv(config.TargetHomeEnv, home)
 	t.Setenv("XOLDOT_SHELL", "bash")
 	before := filesystemSnapshot(t, base)
 
-	for _, command := range []string{"status", "diff"} {
+	for _, arguments := range [][]string{
+		{"status"},
+		{"diff"},
+		{"status", "--format", "json"},
+		{"diff", "--format", "json"},
+	} {
 		var output bytes.Buffer
-		if err := Run([]string{"--config-dir", root, command}, bytes.NewReader(nil), &output, &output, "test"); err != nil {
-			t.Fatalf("%s error = %v", command, err)
+		if err := Run(append([]string{"--config-dir", root}, arguments...), bytes.NewReader(nil), &output, &output, "test"); err != nil {
+			t.Fatalf("%v error = %v", arguments, err)
 		}
 		if after := filesystemSnapshot(t, base); after != before {
-			t.Fatalf("%s changed the filesystem\nbefore:\n%s\nafter:\n%s", command, before, after)
+			t.Fatalf("%v changed the filesystem\nbefore:\n%s\nafter:\n%s", arguments, before, after)
 		}
 	}
 }

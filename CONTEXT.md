@@ -102,11 +102,12 @@ _Avoid_: Component, Step
 A read-only comparison of a Configuration with a Machine. Status reports
 managed home, Alias, and locally verifiable Skill state without running Tool
 checks. It also reports eligible lifecycle scripts without executing them.
+Status can render terminal text or versioned structured JSON.
 _Avoid_: Apply, because Status does not change the Machine
 
 **Diff**:
 A read-only view of the managed home, Alias, and lifecycle-script work that
-Apply would perform.
+Apply would perform. Diff can render terminal text or versioned structured JSON.
 _Avoid_: Status, because Diff shows planned changes rather than all inspected
 state
 
