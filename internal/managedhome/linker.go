@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 
+	"github.com/xolan/xoldot/internal/machinestate"
 	"github.com/xolan/xoldot/internal/pathutil"
 	agentskills "github.com/xolan/xoldot/internal/skills"
 	reportstatus "github.com/xolan/xoldot/internal/status"
@@ -59,6 +60,12 @@ type Inspection struct {
 }
 
 type PathFilter func(relative string) bool
+
+type managedSource struct {
+	relative           string
+	skillDirectory     bool
+	symlinkDestination string
+}
 
 type LedgerError struct {
 	path string
@@ -248,6 +255,46 @@ func InspectSelected(managedRoot, home, configRoot string, include PathFilter) (
 	return plan.inspection(), nil
 }
 
+// Validate checks managed-home content using only Configuration-local paths.
+func Validate(managedRoot, configRoot string) error {
+	resolvedConfigRoot, err := resolveRoot(configRoot, "config root")
+	if err != nil {
+		return err
+	}
+	resolvedManagedRoot, err := resolveRoot(managedRoot, "managed home")
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(resolvedManagedRoot)
+	if err != nil {
+		return fmt.Errorf("inspect managed home %s: %w", managedRoot, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("managed home %s is not a directory", managedRoot)
+	}
+	if !pathutil.Contains(resolvedConfigRoot, resolvedManagedRoot) {
+		return fmt.Errorf("managed home %s resolves outside the Configuration directory %s", managedRoot, configRoot)
+	}
+
+	err = filepath.WalkDir(resolvedManagedRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		source, err := inspectManagedSource(path, entry, resolvedManagedRoot)
+		if err != nil {
+			return err
+		}
+		if source.skillDirectory {
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("validate managed home: %w", err)
+	}
+	return nil
+}
+
 func (plan *Plan) classifyBackupConflicts() error {
 	if len(plan.conflicts) == 0 || plan.layout.homeIdentity == nil {
 		return nil
@@ -287,11 +334,12 @@ func prepare(managedRoot, home, configRoot string, include PathFilter) (Plan, er
 		if walkErr != nil {
 			return walkErr
 		}
-		relative, err := filepath.Rel(managedRoot, source)
+		inspected, err := inspectManagedSource(source, entry, managedRoot)
 		if err != nil {
-			return fmt.Errorf("find path for %s: %w", source, err)
+			return err
 		}
-		skillDirectory := entry.IsDir() && agentskills.IsManagedSkillDirectory(relative)
+		relative := inspected.relative
+		skillDirectory := inspected.skillDirectory
 		if entry.IsDir() && !skillDirectory {
 			return nil
 		}
@@ -301,20 +349,18 @@ func prepare(managedRoot, home, configRoot string, include PathFilter) (Plan, er
 			}
 			return nil
 		}
-		if skillDirectory {
-			if err := validateSkillDirectory(source, managedRoot); err != nil {
-				return err
-			}
-		}
-		isSymlink := entry.Type()&os.ModeSymlink != 0
 
 		target := filepath.Join(home, relative)
-		if layout.reservedTarget(target) {
-			return fmt.Errorf("managed path %s is reserved for xoldot state", source)
-		}
 		destination := source
-		if isSymlink {
-			destination, err = mappedSymlinkDestination(source, target, managedRoot, home, configRoot)
+		if inspected.symlinkDestination != "" {
+			destination, err = mappedSymlinkDestination(
+				source,
+				target,
+				inspected.symlinkDestination,
+				managedRoot,
+				home,
+				configRoot,
+			)
 			if err != nil {
 				return err
 			}
@@ -447,6 +493,44 @@ func walkManagedRoot(root string, walk fs.WalkDirFunc) error {
 		return err
 	}
 	return filepath.WalkDir(root, walk)
+}
+
+func inspectManagedSource(path string, entry fs.DirEntry, managedRoot string) (managedSource, error) {
+	relative, err := filepath.Rel(managedRoot, path)
+	if err != nil {
+		return managedSource{}, fmt.Errorf("find managed home path for %s: %w", path, err)
+	}
+	source := managedSource{
+		relative:       relative,
+		skillDirectory: entry.IsDir() && agentskills.IsManagedSkillDirectory(relative),
+	}
+	if source.skillDirectory {
+		if err := validateSkillDirectory(path, managedRoot); err != nil {
+			return managedSource{}, err
+		}
+		return source, nil
+	}
+	if entry.IsDir() {
+		return source, nil
+	}
+	if machinestate.IsReserved(managedRoot, filepath.Join(managedRoot, relative)) {
+		return managedSource{}, fmt.Errorf("managed path %s is reserved for xoldot state", path)
+	}
+	if entry.Type()&os.ModeSymlink != 0 {
+		source.symlinkDestination, err = managedFileSymlinkDestination(path, managedRoot)
+		if err != nil {
+			return managedSource{}, err
+		}
+		return source, nil
+	}
+	info, err := entry.Info()
+	if err != nil {
+		return managedSource{}, fmt.Errorf("inspect managed path %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return managedSource{}, fmt.Errorf("managed path %s is not a regular file, directory, or symlink", path)
+	}
+	return source, nil
 }
 
 func (plan Plan) Apply(reporter reportstatus.Reporter, dry bool) (Result, error) {
@@ -778,11 +862,7 @@ func exactSymlink(path, destination string) (bool, error) {
 	return actual == destination, nil
 }
 
-func mappedSymlinkDestination(source, target, managedRoot, home, configRoot string) (string, error) {
-	destination, err := managedFileSymlinkDestination(source, managedRoot)
-	if err != nil {
-		return "", err
-	}
+func mappedSymlinkDestination(source, target, destination, managedRoot, home, configRoot string) (string, error) {
 	relative, err := filepath.Rel(managedRoot, destination)
 	if err != nil {
 		return "", fmt.Errorf("map managed symlink %s: %w", source, err)

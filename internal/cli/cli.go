@@ -69,6 +69,7 @@ func (a *app) rootCommand(version string) *cobra.Command {
   xoldot status
   xoldot diff
   xoldot adopt ~/.config/git/config
+  xoldot validate
   xoldot doctor
   xoldot restore 0123456789abcdef01234567 --dry
   xoldot apply --dry
@@ -215,7 +216,7 @@ func (a *app) rootCommand(version string) *cobra.Command {
 	root.AddCommand(a.applyCommand())
 	root.AddCommand(a.restoreCommand())
 	root.AddCommand(a.selfUpdateCommand(version))
-	root.AddCommand(a.statusCommand(), a.diffCommand(), a.doctorCommand())
+	root.AddCommand(a.statusCommand(), a.diffCommand(), a.validateCommand(), a.doctorCommand())
 	root.AddCommand(a.profileCommand())
 
 	var syncDry bool

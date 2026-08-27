@@ -21,6 +21,19 @@ The `run`, `build`, and `install` tasks produce a binary whose version is
 inside this checkout to fast-forward `origin/<current-branch>`. It updates the
 checkout but does not rebuild or reinstall the binary.
 
+## Validate a Configuration repository
+
+Configuration repositories can run the machine-independent validator in CI or
+a pre-commit hook:
+
+```sh
+xoldot --config-dir . validate
+```
+
+This checks Configuration files and local paths only. It does not need a home
+directory, shell detection, external commands, or network access. Use `xoldot
+doctor` separately on a Machine that will apply the Configuration.
+
 ## Build a release archive locally
 
 Set `VERSION`, `GOOS`, and `GOARCH`, then run the archive task:

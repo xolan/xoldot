@@ -32,19 +32,24 @@ func (a *app) doctor() error {
 		case doctor.Warning:
 			kind = status.Warning
 		}
-		decoration, err := decorationForStatus(kind)
-		if err != nil {
+		if err := a.writeFinding(kind, finding.Message, finding.Remedy); err != nil {
 			return err
-		}
-		line := formatStatus(a.style, decoration.color, decoration.prefix, finding.Message, false)
-		if err := write(a.output, line); err != nil {
-			return err
-		}
-		if finding.Remedy != "" {
-			if err := writef(a.output, "  %s %s\n", a.style.heading("remedy:"), finding.Remedy); err != nil {
-				return err
-			}
 		}
 	}
 	return report.Err()
+}
+
+func (a *app) writeFinding(kind status.Kind, message, remedy string) error {
+	decoration, err := decorationForStatus(kind)
+	if err != nil {
+		return err
+	}
+	line := formatStatus(a.style, decoration.color, decoration.prefix, message, false)
+	if err := write(a.output, line); err != nil {
+		return err
+	}
+	if remedy == "" {
+		return nil
+	}
+	return writef(a.output, "  %s %s\n", a.style.heading("remedy:"), remedy)
 }
