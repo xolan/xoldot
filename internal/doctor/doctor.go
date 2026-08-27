@@ -10,9 +10,9 @@ import (
 	"github.com/xolan/xoldot/internal/config"
 	"github.com/xolan/xoldot/internal/gitops"
 	"github.com/xolan/xoldot/internal/managedhome"
-	"github.com/xolan/xoldot/internal/profiles"
 	agentskills "github.com/xolan/xoldot/internal/skills"
 	toolcatalog "github.com/xolan/xoldot/internal/tools"
+	"github.com/xolan/xoldot/internal/validation"
 )
 
 type Severity uint8
@@ -97,6 +97,7 @@ const (
 	orderAliases
 	orderSkills
 	orderProfiles
+	orderLifecycleScripts
 	orderPaths
 	orderLedger
 	orderShell
@@ -117,6 +118,7 @@ func Check(paths config.Paths) Report {
 
 func check(paths config.Paths, commands runtime) Report {
 	checker := checker{paths: paths, commands: commands}
+	checker.checkConfiguration()
 	checker.loadInputs()
 	checker.checkPaths()
 	checker.checkShell()
@@ -125,6 +127,29 @@ func check(paths config.Paths, commands runtime) Report {
 	checker.checkGit()
 	checker.checkNode()
 	return checker.report()
+}
+
+func (checker *checker) checkConfiguration() {
+	for _, finding := range validation.Check(checker.paths).Findings() {
+		order := orderConfiguration
+		switch finding.Kind {
+		case validation.Tools:
+			order = orderTools
+		case validation.Aliases:
+			order = orderAliases
+		case validation.Skills:
+			order = orderSkills
+		case validation.Profiles:
+			order = orderProfiles
+		case validation.LifecycleScripts:
+			order = orderLifecycleScripts
+		case validation.ManagedHome:
+			order = orderPaths
+		case validation.AliasShells:
+			order = orderShell
+		}
+		checker.add(Error, order, finding.Message, finding.Remedy)
+	}
 }
 
 type checker struct {
@@ -156,31 +181,9 @@ func (checker *checker) add(severity Severity, order int, message, remedy string
 
 func (checker *checker) loadInputs() {
 	checker.configuration, checker.configErr = config.Load(checker.paths.Config)
-	if checker.configErr != nil {
-		checker.add(Error, orderConfiguration, checker.configErr.Error(), fmt.Sprintf("Edit %s so it matches the documented xoldot.toml format.", checker.paths.Config))
-	}
-
 	checker.tools, checker.toolsErr = toolcatalog.Load(checker.paths.Tools)
-	if checker.toolsErr != nil {
-		checker.add(Error, orderTools, checker.toolsErr.Error(), fmt.Sprintf("Fix %s so every Tool has a unique name and a non-empty check command.", checker.paths.Tools))
-	}
-
 	checker.aliasFile, checker.aliasesErr = aliases.Load(checker.paths.Aliases)
-	if checker.aliasesErr != nil {
-		checker.add(Error, orderAliases, checker.aliasesErr.Error(), fmt.Sprintf("Fix %s so every Alias has a valid, unique name and a non-empty command.", checker.paths.Aliases))
-	}
-
 	checker.skills, checker.skillsErr = agentskills.Load(checker.paths.Skills)
-	if checker.skillsErr != nil {
-		checker.add(Error, orderSkills, checker.skillsErr.Error(), fmt.Sprintf("Fix %s so every Skill has a valid name, source, digest, and ownership record.", checker.paths.Skills))
-	}
-
-	if err := profiles.Validate(checker.paths); err != nil {
-		var catalogError *profiles.CatalogError
-		if !errors.As(err, &catalogError) {
-			checker.add(Error, orderProfiles, err.Error(), fmt.Sprintf("Fix the Profile declarations under %s, then rerun 'xoldot doctor'.", checker.paths.Profiles))
-		}
-	}
 }
 
 func (checker *checker) checkPaths() {
@@ -193,13 +196,6 @@ func (checker *checker) checkPaths() {
 
 func (checker *checker) checkShell() {
 	checker.shell, checker.shellErr = aliases.DetectShell()
-	if checker.configErr == nil {
-		for _, configuredShell := range checker.configuration.AliasSettings().Shells {
-			if !aliases.SupportsShell(configuredShell) {
-				checker.add(Error, orderShell, fmt.Sprintf("unsupported configured shell %q; supported shells are bash, zsh, and fish", configuredShell), fmt.Sprintf("Remove %q from aliases.shells in %s.", configuredShell, checker.paths.Config))
-			}
-		}
-	}
 	if checker.shellErr != nil {
 		checker.add(Error, orderShell, checker.shellErr.Error(), "Set SHELL or XOLDOT_SHELL to bash, zsh, or fish.")
 	} else if checker.configErr == nil && !slices.Contains(checker.configuration.AliasSettings().Shells, checker.shell) {

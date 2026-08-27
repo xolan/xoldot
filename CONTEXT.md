@@ -119,8 +119,15 @@ _Avoid_: Apply, import
 
 **Doctor**:
 A read-only diagnosis of whether a Configuration and Machine meet xoldot's
-operating requirements, with a remedy for each problem.
+operating requirements, with a remedy for each problem. Doctor includes
+Configuration validation and adds Machine-specific checks.
 _Avoid_: Status, because Doctor checks operating requirements rather than drift
+
+**Validate**:
+A read-only, machine-independent check of every declaration and local path in a
+Configuration. Validate does not inspect a Target home or operating
+requirements.
+_Avoid_: Doctor, because Validate does not diagnose a Machine
 
 **Conflict backup**:
 An opt-in Apply result that preserves displaced managed home conflicts as one

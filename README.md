@@ -14,6 +14,7 @@ files linked into your home directory. Its configuration lives in
 - [Lifecycle scripts](#lifecycle-scripts)
 - [Profiles](#profiles)
 - [Inspect before applying](#inspect-before-applying)
+- [Validate configuration](#validate-configuration)
 - [Troubleshoot](#troubleshoot)
 - [Tools](#tools)
 - [Agent skills](#agent-skills)
@@ -335,6 +336,27 @@ directories, or output files. Drift and conflicts are successful inspection
 results. Invalid configuration, unreadable paths, and invalid ownership state
 still return an error.
 
+## Validate configuration
+
+Validate a complete Configuration without inspecting a Machine:
+
+```sh
+xoldot validate
+xoldot --config-dir ./dotfiles validate
+```
+
+Validate checks `xoldot.toml`, all three catalogs, every Profile and inheritance
+edge, managed-home content and symlinks, and lifecycle script names, paths, and
+executable permissions. It reports independent findings together when the
+underlying files can be checked separately. Each finding includes a remedy.
+
+The command is read-only and machine-independent. It does not detect a shell or
+read a Target home. It does not need installed Tools, Git remotes, Node.js,
+`npx`, or network access, and it does not run Tool commands or lifecycle
+scripts. Use it in Configuration repository CI and pre-commit hooks. A valid
+Configuration prints `Configuration is valid` and exits zero; any finding
+returns a failing exit status.
+
 ## Troubleshoot
 
 Run Doctor when setup, Apply, Skill management, or Sync cannot proceed:
@@ -345,9 +367,7 @@ xoldot doctor
 
 Doctor checks all of these in one run:
 
-- `xoldot.toml`, the Tool, Alias, and Skill catalogs, and every Profile parse
-  and validate. Profile checks include inheritance, catalog references, and
-  managed-home members.
+- All Configuration-local rules checked by `xoldot validate`.
 - Configuration paths, managed-link state, and managed home targets stay within
   their permitted roots and do not create recursion. Skill and Companion-agent
   paths under `.agents` and `.claude` may use explicit directory redirects for
