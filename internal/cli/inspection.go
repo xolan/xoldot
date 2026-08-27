@@ -34,11 +34,19 @@ type machineInputs struct {
 
 func (a *app) statusCommand() *cobra.Command {
 	var profile string
+	var rawFormat string
 	command := &cobra.Command{
 		Use:   "status",
 		Short: "Inspect the current machine without changing it",
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
+			format, err := parseInspectionFormat(rawFormat)
+			if err != nil {
+				return err
+			}
+			if format == inspectionFormatJSON {
+				return a.machineStatusJSON(profile)
+			}
 			return a.machineStatus(profile)
 		},
 	}
@@ -46,16 +54,25 @@ func (a *app) statusCommand() *cobra.Command {
 	if err := command.RegisterFlagCompletionFunc("profile", a.completeProfileNames); err != nil {
 		panic(fmt.Sprintf("register --profile completion: %v", err))
 	}
+	addInspectionFormatFlag(command, &rawFormat)
 	return command
 }
 
 func (a *app) diffCommand() *cobra.Command {
 	var profile string
+	var rawFormat string
 	command := &cobra.Command{
 		Use:   "diff",
 		Short: "Show managed home, alias, and lifecycle script changes without applying them",
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
+			format, err := parseInspectionFormat(rawFormat)
+			if err != nil {
+				return err
+			}
+			if format == inspectionFormatJSON {
+				return a.machineDiffJSON(profile)
+			}
 			return a.machineDiff(profile)
 		},
 	}
@@ -63,6 +80,7 @@ func (a *app) diffCommand() *cobra.Command {
 	if err := command.RegisterFlagCompletionFunc("profile", a.completeProfileNames); err != nil {
 		panic(fmt.Sprintf("register --profile completion: %v", err))
 	}
+	addInspectionFormatFlag(command, &rawFormat)
 	return command
 }
 

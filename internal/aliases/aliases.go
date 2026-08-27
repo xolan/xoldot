@@ -60,6 +60,16 @@ type Plan struct {
 	legacyData []byte
 }
 
+// CurrentContent returns the inspected Alias output before reconciliation.
+func (inspection Inspection) CurrentContent() string {
+	return string(inspection.existing)
+}
+
+// DesiredContent returns the Alias output generated from the current catalog.
+func (inspection Inspection) DesiredContent() string {
+	return string(inspection.desired)
+}
+
 func Load(path string) (File, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

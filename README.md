@@ -299,6 +299,7 @@ Inspect the current Machine without changing it:
 
 ```sh
 xoldot status
+xoldot status --format json
 ```
 
 Status lists each managed home link as current, missing, stale, or conflicting.
@@ -322,6 +323,7 @@ Show only the pending managed home and Alias work:
 
 ```sh
 xoldot diff
+xoldot diff --format json
 ```
 
 Diff prints the link additions and removals that a dry Apply would plan. For an
@@ -334,6 +336,43 @@ Both commands are read-only. They do not create the Target home, state
 directories, or output files. Drift and conflicts are successful inspection
 results. Invalid configuration, unreadable paths, and invalid ownership state
 still return an error.
+
+### Structured inspection output
+
+Status and Diff use the existing terminal text by default. Pass `--format json`
+to write one JSON document to standard output. Errors remain human-readable on
+standard error and return a nonzero status, so a failed command does not emit a
+partial JSON document. `NO_COLOR` and terminal detection do not change JSON
+bytes.
+
+Both documents start with `"schema_version": 1`. Version 1 uses these fields:
+
+- Status has `managed_home`, `backups`, `aliases`, `skills`, `tools`, and
+  `lifecycle_scripts`.
+  - Each managed-home entry has `state`, `target`, `destination`, optional
+    `problem`, and `eligible_for_backup`. States are `current`, `missing`,
+    `stale`, and `conflict`.
+  - Each backup has `id`, `state`, and optional `problem`. States are `ready`,
+    `incomplete`, and `invalid`.
+  - `aliases` has `state`, `path`, and optional `problem`. States are `current`,
+    `missing`, `replaceable`, and `conflict`.
+  - Each Skill has `name`, `state`, and optional `problem`. States are `current`
+    and `problem`.
+  - `tools.unchecked` is the number of declared Tools whose checks Status did
+    not run.
+- Diff has `managed_home`, `aliases`, and `lifecycle_scripts`.
+  - Managed-home entries represent pending work only. `action` is `link`,
+    `remove_stale`, or `conflict`; the remaining fields are `target`,
+    `destination`, `eligible_for_backup`, and optional `problem`.
+  - `aliases.action` is `none`, `create`, `replace`, or `conflict`. The object
+    always has `path`. Replacement objects contain `current_content` and
+    `desired_content`; conflicts contain `problem`.
+- In both documents, `lifecycle_scripts.before_apply` and `after_apply` contain
+  objects with a `path`. Empty collections are `[]`, not `null`.
+
+JSON arrays have deterministic order. Managed-home entries sort by target,
+backups by ID, Skills by name, and lifecycle scripts by path. Field names,
+action/state values, and their meanings are part of schema version 1.
 
 ## Troubleshoot
 
