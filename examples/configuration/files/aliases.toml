@@ -1,0 +1,11 @@
+[[alias]]
+name = "xoldot-config"
+command = "printf '%s\n' ~/.config/xoldot"
+
+[[alias]]
+name = "worktree"
+command = "printf 'work profile\n'"
+
+[[alias]]
+name = "weekend"
+command = "printf 'personal profile\n'"

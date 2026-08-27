@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+
+printf 'Preparing xoldot profile: %s\n' "${XOLDOT_PROFILE:-complete Configuration}"

@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+
+printf 'Applied xoldot parts: %s\n' "$XOLDOT_APPLY_COMPONENTS"

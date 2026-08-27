@@ -100,6 +100,11 @@ Setup creates any missing files in this layout:
 └── tools.toml
 ```
 
+The maintained [example Configuration](examples/configuration/README.md)
+fills in this tree with Tools, Aliases, a Skill, Profiles, managed files, and
+lifecycle scripts. You can copy it to a temporary `--config-dir` for a safe dry
+run.
+
 Enter a Git remote URL when prompted to enable sync. Leave it blank to keep
 Git disabled. If the remote already has a `main` branch, setup checks it out
 before creating the missing files.
